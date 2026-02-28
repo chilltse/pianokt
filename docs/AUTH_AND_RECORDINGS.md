@@ -14,6 +14,21 @@
 2. **Authentication → Providers**：启用 Email，启用 Google（需在 Google Cloud Console 配置 OAuth 客户端 ID/Secret，并在 Supabase 中填写回调 URL）。
 3. **Project Settings → API**：复制 `Project URL` 和 `anon public` key，填入本地 `.env`（见下）。
 
+### 1.1 登录白名单（可选）
+
+仅允许「事先加入白名单」的邮箱或 Google 账号登录：在 **SQL Editor** 中执行 `supabase/migrations/002_auth_whitelist.sql`。执行后：
+
+- **未添加任何邮箱**：所有人可正常登录（白名单未启用）。
+- **已添加至少一个邮箱**：只有 `public.allowed_emails` 表中的邮箱可以登录；其他用户登录后会被立即登出并提示 "Your account is not on the access list. Contact the administrator."
+
+**添加允许的邮箱**（在 SQL Editor 中执行）：
+
+```sql
+insert into public.allowed_emails (email) values ('user@example.com');
+```
+
+支持邮箱登录和 Google 登录；Google 账号以该账号的邮箱为准。可多次执行 `insert` 添加多个邮箱（已存在会报唯一约束，可改用 `on conflict (email) do nothing`）。
+
 ## 2. 环境变量
 
 在项目根目录创建 `.env`（不要提交到 Git），参考 `.env.example`：
@@ -29,6 +44,18 @@ VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 在 Supabase **SQL Editor** 中执行以下 SQL。
 
 ### 3.1 用户资料表（与 auth.users 同步，含 Google 头像/昵称/邮箱）
+
+**推荐**：在 SQL Editor 中依次执行：
+
+1. **`supabase/migrations/003_profiles_sync_from_auth.sql`** — 创建 `profiles` 表与触发器（Google/邮箱登录自动创建或更新 profile）。
+2. **`supabase/migrations/004_upsert_profile_from_auth_rpc.sql`** — 创建 RPC `upsert_profile_from_auth`；前端在每次登录通过白名单后会调用该 RPC，确保即使用户未由触发器写入，也会在 `profiles` 中有一行（**解决 Google 登录后 profiles 无记录的问题**）。
+3. **已有用户补全**：若在加触发器之前就有用户登录过，需在 SQL Editor 中**执行一次** **`supabase/scripts/backfill_profiles_from_auth.sql`**，将 `auth.users` 中已有用户同步到 `profiles`。若提示读取 `auth.users` 有风险，以项目管理员身份确认后执行即可。
+
+**确认触发器已创建**（可选）：在 SQL Editor 中执行  
+`select trigger_name, event_object_schema, event_object_table from information_schema.triggers where event_object_table = 'users';`  
+应能看到 `on_auth_user_created` 与 `on_auth_user_updated` 挂在 `auth.users` 上。
+
+若需手动执行，可使用下方 SQL：
 
 ```sql
 -- 用户公开资料（由 auth.users 同步，头像等存 Supabase 供排行榜等使用）

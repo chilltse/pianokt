@@ -352,7 +352,7 @@ export default function ChallengePage() {
             handSettings={getHandSettings(songConfig)}
             selectedRange={selectedRange}
             getTime={() => (player as any).getTime?.() ?? 0}
-            enableTouchscroll={songConfig.visualization === 'falling-notes'}
+            enableTouchscroll={false}
           />
           {playerState.countingDown && countdownTotal > 0 && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">

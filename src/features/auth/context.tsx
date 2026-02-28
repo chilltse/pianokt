@@ -41,6 +41,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(mapUser(session?.user ?? null))
   }, [])
 
+  const checkWhitelistAndSignOutIfNeeded = useCallback(async () => {
+    if (!supabase) return
+    const { data, error: rpcErr } = await supabase.rpc('check_user_allowed')
+    if (rpcErr) return
+    if (data === false) {
+      await supabase.auth.signOut()
+      setUser(null)
+      setError('Your account is not on the access list. Contact the administrator.')
+      navigate('/', { replace: true })
+      return
+    }
+    // 确保 profiles 表有当前用户（触发器可能未执行，如部分 OAuth 场景）
+    await supabase.rpc('upsert_profile_from_auth').then(() => {}, () => {})
+  }, [navigate])
+
   useEffect(() => {
     if (!supabase) {
       setLoading(false)
@@ -48,16 +63,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
       updateFromSession(session)
       setLoading(false)
+      if (session?.user) {
+        await checkWhitelistAndSignOutIfNeeded()
+      }
     })
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       updateFromSession(session)
       setLoading(false)
+      if (session?.user) {
+        await checkWhitelistAndSignOutIfNeeded()
+      }
     })
     return () => subscription.unsubscribe()
-  }, [updateFromSession])
+  }, [updateFromSession, checkWhitelistAndSignOutIfNeeded])
 
   const signUpWithEmail = useCallback(async (email: string, password: string) => {
     setError(null)

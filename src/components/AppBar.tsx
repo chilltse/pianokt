@@ -83,7 +83,7 @@ export default function AppBar() {
               <Youtube size={20} />
             </NavIconButton>
             <NavIconButton
-              to={'https://github.com/chilltse/sightread'}
+              to={'https://github.com/chilltse/pianokt'}
               label="GitHub"
               title="GitHub"
             >
@@ -166,7 +166,7 @@ function SmallWindowNav() {
           )}
           <Separator className="mx-2 my-1 border-t border-gray-100" />
           <MenuItem
-            href="https://github.com/chilltse/sightread"
+            href="https://github.com/chilltse/pianokt"
             target="_blank"
             className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-gray-700 transition outline-none data-[focused]:bg-gray-100 data-[pressed]:bg-gray-200"
             aria-label="GitHub"
