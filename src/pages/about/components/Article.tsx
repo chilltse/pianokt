@@ -11,7 +11,7 @@ export function Article({
     <article id={slugify(header)}>
       <h1 className="text-3xl font-bold">{header}</h1>
       <Sizer height={8} />
-      <div aria-hidden className="border-purple-primary border" />
+      <div aria-hidden className="border-stone-400 border" />
       <Sizer height={16} />
       {first && (
         <>

@@ -5,7 +5,7 @@ import React, { MouseEvent, PropsWithChildren } from 'react'
 import { Button, TooltipTrigger } from 'react-aria-components'
 
 type TopBarProps = {
-  title?: string
+  title?: string // ? = 可选参数
   subtitle?: string
   onClickBack: () => void
   onClickMidi: (e: MouseEvent<any>) => void

@@ -8,7 +8,7 @@ import { slugify } from './utils'
 
 function SidebarLink({ children }: PropsWithChildren<{ children: string }>) {
   return (
-    <a className="hover:text-purple-hover" href={`#${slugify(children)}`}>
+    <a className="hover:text-amber-800" href={`#${slugify(children)}`}>
       {children}
     </a>
   )
@@ -16,10 +16,10 @@ function SidebarLink({ children }: PropsWithChildren<{ children: string }>) {
 
 export default function AboutPage() {
   return (
-    <div className="relative">
+    <div className="relative bg-paper bg-amber-50/70 min-h-screen">
       <title>About</title>
       <AppBar />
-      <div className="md:bg-purple-lightest">
+      <div className="bg-paper bg-amber-50/70">
         <div className="mx-auto flex max-w-(--breakpoint-lg)">
           <div className="sticky top-0 hidden max-h-screen p-8 md:block">
             <section className="mx-auto flex flex-col">

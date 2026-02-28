@@ -324,6 +324,9 @@ function midiEventsToMidi(events: MidiEvent[]) {
   return midi.toArray()
 }
 
+// 使用歌曲时间驱动的分段录音（与 challenge 页、flushSilenceTo、stopRecording(songTimeSec, targetDurationSec) 一致）
+export { useSegmentedRecordMidi } from './useSegmentedRecordMidi'
+
 export function record(midiState: MidiState) {
   const recording: MidiEvent[] = []
   // Offset times so first note in the recording occurs at ts=0

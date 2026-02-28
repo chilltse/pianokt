@@ -1,5 +1,6 @@
 import { AppBar, MarketingFooter, Modal, Sizer } from '@/components'
 import { useSongManifest } from '@/features/data/library'
+import { useOptionalAuth } from '@/features/auth'
 import { isInitializedAtom } from '@/features/persist/persistence'
 import { SongPreviewModal } from '@/features/SongPreview'
 import { useEventListener } from '@/hooks'
@@ -8,7 +9,7 @@ import { SongMetadata } from '@/types'
 import clsx from 'clsx'
 import { useAtomValue } from 'jotai'
 import * as React from 'react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Table } from './components'
 import ManageFoldersForm from './components/AddFolderForm'
 import { SearchBox } from './components/Table/SearchBox'
@@ -18,6 +19,7 @@ import { TableSkeleton } from './components/Table/Table'
 export default function SelectSongPage() {
   let songs: SongMetadata[] = useSongManifest()
   const isInitialized = useAtomValue(isInitializedAtom)
+  useOptionalAuth()
   const [isUploadFormOpen, setUploadForm] = useState<boolean>(false)
   const [selectedSongId, setSelectedSongId] = useState<any>('')
   const selectedSongMeta = songs.find((s) => s.id === selectedSongId)
@@ -40,7 +42,7 @@ export default function SelectSongPage() {
 
   return (
     <>
-      <title>Select a song</title>
+      <title>Practice a song</title>
       <SongPreviewModal
         show={!!selectedSongId}
         songMeta={selectedSongMeta}
@@ -51,15 +53,15 @@ export default function SelectSongPage() {
       <Modal show={isUploadFormOpen} onClose={handleCloseAddNew} className="w-[min(100vw,500px)]">
         <ManageFoldersForm onClose={handleCloseAddNew} />
       </Modal>
-      <div className="flex h-screen w-full flex-col overflow-hidden bg-gray-50">
+      <div className="flex h-screen w-full flex-col overflow-hidden bg-paper bg-amber-50/70">
         <div className="shrink-0">
           <AppBar />
         </div>
         <div className="mx-auto flex min-h-0 w-full max-w-(--breakpoint-lg) flex-1 flex-col p-6">
-          <h2 className="text-2xl font-semibold text-gray-900">Learn a song</h2>
+          <h2 className="text-2xl font-semibold text-gray-900">Practice a song</h2>
           <Sizer height={4} />
           <h3 className="text-sm text-gray-600">
-            Select a song, choose your settings, and begin learning
+            Select a song, choose your settings, and have fun practicing!
           </h3>
           <Sizer height={16} />
           <div className="flex items-center gap-4">
@@ -69,8 +71,8 @@ export default function SelectSongPage() {
             <button
               className={clsx(
                 'cursor-pointer flex-nowrap whitespace-nowrap',
-                'inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm',
-                'transition-colors hover:bg-gray-50',
+                'inline-flex items-center gap-2 rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm',
+                'transition-colors hover:bg-amber-50',
               )}
               onClick={handleAddNew}
             >
@@ -81,7 +83,11 @@ export default function SelectSongPage() {
           </div>
           <Sizer height={20} />
           {isInitialized ? (
-            <Table rows={songs} search={search} onSelectRow={setSelectedSongId} />
+            <Table
+              rows={songs}
+              search={search}
+              onSelectRow={setSelectedSongId}
+            />
           ) : (
             <TableSkeleton />
           )}

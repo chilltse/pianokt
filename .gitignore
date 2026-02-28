@@ -21,3 +21,6 @@ tsconfig.tsbuildinfo
 
 # vercel cli files
 .vercel
+
+# additional notes
+*_mynotes.*

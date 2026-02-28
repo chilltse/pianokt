@@ -33,18 +33,21 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(downloadLink.href)
 }
 
-type ModalProps = {
+export type RecordingModalProps = {
   show: boolean
   onClose: () => void
+  /** 可选：在用户执行某操作（如复制链接、下载）后调用，例如 challenge 页用来自动返回主页 */
+  onAfterAction?: () => void
   songMeta?: { source: SongSource; id: string }
   instrument?: InstrumentName
 }
 export default function SongPreviewModal({
   show = true,
   onClose = () => {},
+  onAfterAction,
   songMeta = undefined,
   instrument,
-}: ModalProps) {
+}: RecordingModalProps) {
   const { id, source } = songMeta ?? {}
   const player = usePlayer()
   const playerState = usePlayerState()
@@ -175,6 +178,7 @@ export default function SongPreviewModal({
                   const origin = window.location.origin
                   const url = `${origin}/play/?source=base64&id=${encodeURIComponent(id)}`
                   copyToClipboard(url)
+                  onAfterAction?.()
                 }}
               >
                 <Share />
@@ -182,7 +186,10 @@ export default function SongPreviewModal({
               </Button>
               <Button
                 className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-violet-600 text-sm font-semibold text-white shadow-md transition hover:bg-violet-500 active:bg-violet-700"
-                onPress={() => downloadBase64Midi(id)}
+                onPress={() => {
+                  downloadBase64Midi(id)
+                  onAfterAction?.()
+                }}
               >
                 <Download />
                 Download MIDI
@@ -201,6 +208,7 @@ export default function SongPreviewModal({
                     const midiBytes = base64ToBytes(id)
                     const mp3Blob = await renderMidiToMp3(midiBytes, instrument)
                     downloadBlob(mp3Blob, 'recording.mp3')
+                    onAfterAction?.()
                   } catch (error) {
                     console.error('Failed to render MP3', error)
                   } finally {

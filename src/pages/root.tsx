@@ -10,7 +10,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-        <title>Sightread</title>
+        <title>Piano KT</title>
         <meta name="author" content="Jake Fried" />
         <meta name="description" content="app for learning piano" />
 
