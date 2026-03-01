@@ -15,6 +15,8 @@ export async function saveChallengeRecording(params: {
   midiBase64: string
   accuracyPct?: number
   difficulty?: number
+  /** true if the recording was made with a MIDI keyboard/device connected */
+  midiKeyboardUsed?: boolean
 }): Promise<{ id: string } | { error: string }> {
   if (!supabase) {
     console.error('[saveChallengeRecording] Supabase not configured')
@@ -27,7 +29,7 @@ export async function saveChallengeRecording(params: {
     return { error: 'Not authenticated' }
   }
 
-  const { songSource, songId, songTitle, durationSec, midiBase64, accuracyPct, difficulty } = params
+  const { songSource, songId, songTitle, durationSec, midiBase64, accuracyPct, difficulty, midiKeyboardUsed } = params
 
   const recordingId = crypto.randomUUID()
   const path = `${user.id}/${recordingId}.mid`
@@ -51,6 +53,7 @@ export async function saveChallengeRecording(params: {
     p_midi_storage_path: path,
     p_accuracy_pct: accuracyPct ?? 0,
     p_difficulty: difficulty ?? 0,
+    p_midi_keyboard_used: midiKeyboardUsed ?? false,
   })
   if (rpcError) {
     console.error('[saveChallengeRecording] RPC save_challenge_recording failed:', rpcError)

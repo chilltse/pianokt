@@ -2,7 +2,7 @@ import Toast from '@/components/Toast'
 import { isChallengeSuccess, saveChallengeRecording } from '@/features/challenge-history'
 import { useSong } from '@/features/data'
 import { useSongMetadata } from '@/features/data/library'
-import midiState, { useSegmentedRecordMidi } from '@/features/midi'
+import midiState, { getMidiInputs, useSegmentedRecordMidi } from '@/features/midi'
 import { useSongScrubTimes } from '@/features/controls'
 import { usePlayer } from '@/features/player'
 import {
@@ -277,14 +277,18 @@ export default function ChallengePage() {
         const base64 = bytesToBase64(midiBytes)
         const durationSec = dur > 0 ? dur : 1
         const difficulty = songMeta?.difficulty ?? 0
-        saveChallengeRecording({
-          songSource: source,
-          songId: id,
-          songTitle: songMeta?.title ?? null,
-          durationSec,
-          midiBase64: base64,
-          accuracyPct: accuracy,
-          difficulty,
+        getMidiInputs().then((inputs) => {
+          const midiKeyboardUsed = inputs.size > 0
+          return saveChallengeRecording({
+            songSource: source,
+            songId: id,
+            songTitle: songMeta?.title ?? null,
+            durationSec,
+            midiBase64: base64,
+            accuracyPct: accuracy,
+            difficulty,
+            midiKeyboardUsed,
+          })
         }).then((result) => {
           if ('error' in result) {
             if (result.error !== 'Not authenticated') {

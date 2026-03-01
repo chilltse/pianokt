@@ -9,6 +9,7 @@ export type ChallengeRecordingRow = {
   created_at: string
   accuracy_pct?: number
   difficulty?: number
+  midi_keyboard_used?: boolean
 }
 
 export type LeaderboardEntry = {
