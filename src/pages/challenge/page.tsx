@@ -207,7 +207,8 @@ export default function ChallengePage() {
       startOrResumeRecording(nowSongSec())
       player.play()
     } else {
-      // Pause：pause 时必须补齐静默到当前歌曲时间
+      // Pause: only pause recording and playback; show "Continue or Exit?" dialog (not the complete modal)
+      pausedByUserRef.current = true
       pauseRecording(nowSongSec())
       player.pause()
       setIsConfirmExitOpen(true)
@@ -224,6 +225,8 @@ export default function ChallengePage() {
   // 播放过程中用 ref 记录“最后已知”的歌曲时间与总长，避免 effect 里读 player 时已被重置
   const lastSongTimeRef = useRef(0)
   const lastDurationRef = useRef(0)
+  // 用户主动暂停（点 Pause 或 Exit）时置 true，避免“播放结束” effect 误当作 challenge 完成
+  const pausedByUserRef = useRef(false)
 
   // ✅ 播放期间每 100ms 推进静默时间并更新 ref，供“播完”判断用
   useEffect(() => {
@@ -250,6 +253,13 @@ export default function ChallengePage() {
     }
 
     if (wasPlaying && !isPlayingNow) {
+      // Only treat as challenge finished when playback ended naturally (not when user paused)
+      if (pausedByUserRef.current) {
+        pausedByUserRef.current = false
+        previousPlayingRef.current = isPlayingNow
+        return
+      }
+
       const dur = lastDurationRef.current || ((player as any).getDuration?.() ?? 0)
       const midiBytes = stopRecording(nowSongSec(), dur > 0 ? dur : undefined)
       const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
@@ -402,6 +412,7 @@ export default function ChallengePage() {
               <button
                 className="px-3 py-1.5 text-xs rounded bg-red-600"
                 onClick={() => {
+                  pausedByUserRef.current = true
                   player.stop()
                   stopRecording(nowSongSec())
                   setIsConfirmExitOpen(false)

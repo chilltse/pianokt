@@ -2,14 +2,19 @@ import { AppBar } from '@/components'
 import { isAuthEnabled, useAuth } from '@/features/auth'
 import { supabase } from '@/features/auth/supabase'
 import { resolveAuthRedirect } from '@/utils/authRedirect'
-import { useEffect } from 'react'
+import { LoaderCircle, CheckCircle2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
+
+const REDIRECT_DELAY_MS = 800
 
 export default function LoginPage() {
   const { signInWithEmail, signInWithGoogle, error, clearError, loading } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const redirectTo = searchParams.get('redirect') ?? '/'
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
   useEffect(() => {
     clearError()
@@ -37,25 +42,34 @@ export default function LoginPage() {
     const email = (form.elements.namedItem('email') as HTMLInputElement).value.trim()
     const password = (form.elements.namedItem('password') as HTMLInputElement).value
     if (!email || !password) return
+    setIsSubmitting(true)
+    setSuccessMessage(null)
     try {
       await signInWithEmail(email, password)
+      setSuccessMessage('Login successful, redirecting…')
       const { data: { session } } = await supabase!.auth.getSession()
       const uid = session?.user?.id
       const target = uid ? resolveAuthRedirect(redirectTo, uid) : redirectTo
-      navigate(target, { replace: true })
+      setTimeout(() => navigate(target, { replace: true }), REDIRECT_DELAY_MS)
     } catch {
+      setIsSubmitting(false)
       // error set in context
     }
   }
 
   async function handleGoogle() {
+    setIsSubmitting(true)
+    setSuccessMessage(null)
     try {
       await signInWithGoogle()
       // OAuth redirects away; no navigate here
     } catch {
+      setIsSubmitting(false)
       // error set in context
     }
   }
+
+  const busy = loading || isSubmitting
 
   return (
     <>
@@ -70,6 +84,12 @@ export default function LoginPage() {
           </Link>
         </p>
         <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+          {successMessage && (
+            <div className="flex items-center gap-2 rounded-lg bg-green-50 px-3 py-2.5 text-sm text-green-800">
+              <CheckCircle2 className="h-5 w-5 shrink-0 text-green-600" />
+              <span>{successMessage}</span>
+            </div>
+          )}
           {error && (
             <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
           )}
@@ -101,10 +121,17 @@ export default function LoginPage() {
           </div>
           <button
             type="submit"
-            disabled={loading}
-            className="w-full rounded-md bg-stone-500 px-4 py-2 text-sm font-medium text-stone-50 hover:bg-stone-600 disabled:opacity-50"
+            disabled={busy}
+            className="flex w-full items-center justify-center gap-2 rounded-md bg-stone-500 px-4 py-2 text-sm font-medium text-stone-50 hover:bg-stone-600 disabled:opacity-50"
           >
-            Log in
+            {busy ? (
+              <>
+                <LoaderCircle className="h-4 w-4 animate-spin shrink-0" />
+                <span>Logging in…</span>
+              </>
+            ) : (
+              'Log in'
+            )}
           </button>
         </form>
         <div className="mt-6">
@@ -119,10 +146,13 @@ export default function LoginPage() {
           <button
             type="button"
             onClick={handleGoogle}
-            disabled={loading}
+            disabled={busy}
             className="mt-4 flex w-full items-center justify-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50"
           >
-            <svg className="h-5 w-5" viewBox="0 0 24 24">
+            {busy ? (
+              <LoaderCircle className="h-5 w-5 animate-spin shrink-0" />
+            ) : (
+              <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24">
               <path
                 fill="#4285F4"
                 d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -140,7 +170,8 @@ export default function LoginPage() {
                 d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
               />
             </svg>
-            Google
+            )}
+            <span>{busy ? 'Redirecting…' : 'Google'}</span>
           </button>
         </div>
         <p className="mt-6 text-center">
