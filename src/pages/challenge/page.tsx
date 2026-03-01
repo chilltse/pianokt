@@ -333,7 +333,7 @@ export default function ChallengePage() {
     <>
       <title>Challenge</title>
       <div
-        className={clsx('fixed grid h-screen w-screen grid-rows-[auto_1fr_auto] outline-none')}
+        className={clsx('fixed grid w-screen grid-rows-[auto_1fr_auto] outline-none h-[100dvh] h-screen')}
         {...midiState.getListenerProps()}
         autoFocus
       >
@@ -375,7 +375,7 @@ export default function ChallengePage() {
             </div>
           )}
         </div>
-        <div className="flex h-12 items-center justify-between border-t border-[#23242b] bg-[#141419] px-4 text-gray-200">
+        <div className="flex h-12 min-h-12 shrink-0 items-center justify-between border-t border-[#23242b] bg-[#141419] px-4 pb-[env(safe-area-inset-bottom)] text-gray-200">
           <div className="flex items-center gap-3">
             <button
               className="flex h-9 px-4 items-center justify-center rounded-full bg-violet-600 text-white text-sm font-semibold"

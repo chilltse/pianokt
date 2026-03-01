@@ -1,4 +1,5 @@
 import { useOptionalAuth } from '@/features/auth'
+import { useEffect, useRef } from 'react'
 import { ModalOverlay, Modal as RACModal } from 'react-aria-components'
 import { useNavigate } from 'react-router'
 import { tv } from 'tailwind-variants'
@@ -58,6 +59,22 @@ export default function ChallengeSuccessModal({
 
   const isSuccess = variant === 'success'
   const videoSrc = isSuccess ? videoSrcSuccess : videoSrcComplete
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+
+  useEffect(() => {
+    if (!show) return
+    const el = videoRef.current
+    if (!el) return
+    const play = () => {
+      el.play().catch(() => {})
+    }
+    if (el.readyState >= 2) {
+      play()
+    } else {
+      el.addEventListener('canplay', play, { once: true })
+      return () => el.removeEventListener('canplay', play)
+    }
+  }, [show, videoSrc])
 
   return (
     <ModalOverlay
@@ -72,11 +89,14 @@ export default function ChallengeSuccessModal({
         <div className="flex flex-col">
           <div className="relative aspect-video w-full bg-black/5">
             <video
+              ref={videoRef}
+              key={videoSrc}
               src={videoSrc}
               autoPlay
               loop
               muted
               playsInline
+              preload="auto"
               className="h-full w-full object-contain"
               aria-hidden
             />
