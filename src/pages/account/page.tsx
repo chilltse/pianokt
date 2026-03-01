@@ -9,7 +9,7 @@ import {
 import clsx from 'clsx'
 import { ChevronDown } from '@/icons'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { supabase } from '@/features/auth/supabase'
 
 type Stats = {
@@ -19,6 +19,7 @@ type Stats = {
 }
 
 export default function AccountPage() {
+  const navigate = useNavigate()
   const { user, loading: authLoading } = useRequireAuth('account')
   const { signOut, refreshSession } = useAuth()
   const [stats, setStats] = useState<Stats | null>(null)
@@ -86,18 +87,23 @@ export default function AccountPage() {
       setPasswordMessage('error')
       return
     }
-    setPasswordSaving(true)
     if (!supabase) {
-      setPasswordSaving(false)
       setPasswordMessage('error')
       return
     }
-    const { error } = await supabase.auth.updateUser({ password: passwordNew })
-    setPasswordSaving(false)
-    setPasswordMessage(error ? 'error' : 'saved')
-    if (!error) {
-      setPasswordNew('')
-      setPasswordConfirm('')
+    setPasswordSaving(true)
+    try {
+      const { error } = await supabase.auth.updateUser({ password: passwordNew })
+      setPasswordMessage(error ? 'error' : 'saved')
+      if (!error) {
+        setPasswordNew('')
+        setPasswordConfirm('')
+        setTimeout(() => navigate('/', { replace: true }), 800)
+      }
+    } catch {
+      setPasswordMessage('error')
+    } finally {
+      setPasswordSaving(false)
     }
   }
 

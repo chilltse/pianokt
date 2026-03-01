@@ -216,10 +216,15 @@ export default function ChallengePage() {
   }
 
   useEventListener<KeyboardEvent>('keydown', (evt: KeyboardEvent) => {
-    if (evt.code === 'Space') {
-      evt.preventDefault()
-      handleTogglePlayingChallenge()
+    if (evt.code !== 'Space') return
+    evt.preventDefault()
+    if (isConfirmExitOpen) {
+      setIsConfirmExitOpen(false)
+      startOrResumeRecording(nowSongSec())
+      player.play()
+      return
     }
+    handleTogglePlayingChallenge()
   })
 
   // 播放过程中用 ref 记录“最后已知”的歌曲时间与总长，避免 effect 里读 player 时已被重置

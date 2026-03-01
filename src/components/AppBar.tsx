@@ -33,8 +33,10 @@ export default function AppBar() {
       }}
     >
       <div className="mx-auto flex w-full items-center justify-center pl-6 md:max-w-(--breakpoint-lg)">
-        <div className="absolute top-1/2 right-5 left-5 z-10 -translate-y-1/2 md:hidden">
-          <SmallWindowNav />
+        <div className="pointer-events-none absolute top-1/2 right-5 left-5 z-10 flex -translate-y-1/2 items-center justify-between md:hidden">
+          <div className="pointer-events-auto">
+            <SmallWindowNav />
+          </div>
         </div>
         <Link to={'/'} className="flex items-center text-gray-700 hover:text-gray-900">
           <img

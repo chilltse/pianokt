@@ -87,11 +87,20 @@ export default function ChallengeSongsPage() {
       <div className="flex min-h-screen flex-col bg-paper bg-amber-50/70">
         <AppBar />
         <div className="mx-auto flex min-h-0 w-full max-w-(--breakpoint-lg) flex-1 flex-col p-6">
-          <h2 className="text-2xl font-semibold text-gray-900">Take a challenge</h2>
-          <Sizer height={4} />
-          <p className="text-sm text-gray-600">
-            Challenge a song to the end. With accuracy ≥ 90% seen as success.
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-6">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-2xl font-semibold text-gray-900">Take a challenge</h2>
+              <Sizer height={4} />
+              <p className="text-sm text-gray-600">
+                Challenge a song to the end. With accuracy ≥ 90% seen as success.
+              </p>
+            </div>
+            <img
+              src="/images/challenge-anime.png"
+              alt="Challenge"
+              className="h-32 w-auto shrink-0 rounded-xl object-contain sm:h-36 md:h-40"
+            />
+          </div>
           <Sizer height={24} />
 
           {/* 挑战过的 */}

@@ -1,8 +1,10 @@
 import { supabase } from '@/features/auth/supabase'
 import type { AuthUser } from '@/features/auth/types'
 import type { User, Session } from '@supabase/supabase-js'
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
+
+const AUTH_LOAD_TIMEOUT_MS = 5000
 
 function mapUser(u: User | null): AuthUser | null {
   if (!u) return null
@@ -33,6 +35,8 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate()
+  const navigateRef = useRef(navigate)
+  navigateRef.current = navigate
   const [user, setUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -41,44 +45,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(mapUser(session?.user ?? null))
   }, [])
 
-  const checkWhitelistAndSignOutIfNeeded = useCallback(async () => {
-    if (!supabase) return
-    const { data, error: rpcErr } = await supabase.rpc('check_user_allowed')
-    if (rpcErr) return
-    if (data === false) {
-      await supabase.auth.signOut()
-      setUser(null)
-      setError('Your account is not on the access list. Contact the administrator.')
-      navigate('/', { replace: true })
-      return
-    }
-    // 确保 profiles 表有当前用户（触发器可能未执行，如部分 OAuth 场景）
-    await supabase.rpc('upsert_profile_from_auth').then(() => {}, () => {})
-  }, [navigate])
-
   useEffect(() => {
     if (!supabase) {
       setLoading(false)
       return () => {}
     }
+    const setDone = () => setLoading(false)
+    const timeoutId = setTimeout(setDone, AUTH_LOAD_TIMEOUT_MS)
+
+    const checkWhitelistAndSignOutIfNeeded = async () => {
+      const { data, error: rpcErr } = await supabase.rpc('check_user_allowed')
+      if (rpcErr) return
+      if (data === false) {
+        await supabase.auth.signOut()
+        setUser(null)
+        setError('Your account is not on the access list. Contact the administrator.')
+        navigateRef.current('/', { replace: true })
+        return
+      }
+      await supabase.rpc('upsert_profile_from_auth').then(() => {}, () => {})
+    }
+
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
       updateFromSession(session)
+      clearTimeout(timeoutId)
       setLoading(false)
       if (session?.user) {
-        await checkWhitelistAndSignOutIfNeeded()
+        checkWhitelistAndSignOutIfNeeded().catch(() => {})
       }
     })
+
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       updateFromSession(session)
+      clearTimeout(timeoutId)
       setLoading(false)
       if (session?.user) {
-        await checkWhitelistAndSignOutIfNeeded()
+        checkWhitelistAndSignOutIfNeeded().catch(() => {})
       }
     })
-    return () => subscription.unsubscribe()
-  }, [updateFromSession, checkWhitelistAndSignOutIfNeeded])
+
+    return () => {
+      clearTimeout(timeoutId)
+      subscription.unsubscribe()
+    }
+  }, [updateFromSession])
 
   const signUpWithEmail = useCallback(async (email: string, password: string) => {
     setError(null)
@@ -95,7 +107,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!supabase) throw new Error('Auth not configured')
     const { error: e } = await supabase.auth.signInWithPassword({ email, password })
     if (e) {
-      setError(e.message)
+      const isEmailNotConfirmed =
+        /email not confirmed|user not confirmed|not confirmed/i.test(e.message)
+      setError(
+        isEmailNotConfirmed
+          ? 'Please check your registration email and click the confirmation link to verify your account before logging in.'
+          : e.message
+      )
       throw e
     }
   }, [])

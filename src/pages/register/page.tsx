@@ -1,6 +1,8 @@
+import ConsentModal from '@/components/ConsentModal'
 import Toast from '@/components/Toast'
 import { AppBar } from '@/components'
 import { isAuthEnabled, useAuth } from '@/features/auth'
+import consentContent from '@/content/consent.md?raw'
 import { LoaderCircle, CheckCircle2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
@@ -19,6 +21,9 @@ export default function RegisterPage() {
   const toastKeyRef = useRef(toastKey)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [consentModalOpen, setConsentModalOpen] = useState(false)
+  const [pendingRegistration, setPendingRegistration] = useState<'email' | 'google' | null>(null)
+  const formRef = useRef<HTMLFormElement | null>(null)
 
   useEffect(() => {
     clearError()
@@ -52,12 +57,7 @@ export default function RegisterPage() {
     )
   }
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    const form = e.currentTarget
-    const email = (form.elements.namedItem('email') as HTMLInputElement).value.trim()
-    const password = (form.elements.namedItem('password') as HTMLInputElement).value
-    if (!email || !password) return
+  async function doEmailSignup(email: string, password: string) {
     setIsSubmitting(true)
     setSuccessMessage(null)
     try {
@@ -67,11 +67,10 @@ export default function RegisterPage() {
       setTimeout(() => navigate(redirectTo, { replace: true }), 2000)
     } catch {
       setIsSubmitting(false)
-      // error set in context
     }
   }
 
-  async function handleGoogle() {
+  async function doGoogleSignup() {
     setIsSubmitting(true)
     setSuccessMessage(null)
     try {
@@ -79,8 +78,44 @@ export default function RegisterPage() {
       // OAuth redirects away
     } catch {
       setIsSubmitting(false)
-      // error set in context
     }
+  }
+
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const form = e.currentTarget
+    const email = (form.elements.namedItem('email') as HTMLInputElement).value.trim()
+    const password = (form.elements.namedItem('password') as HTMLInputElement).value
+    if (!email || !password) return
+    // Show consent modal first; on agree, doEmailSignup will be called
+    formRef.current = form
+    setPendingRegistration('email')
+    setConsentModalOpen(true)
+  }
+
+  function handleGoogle() {
+    setPendingRegistration('google')
+    setConsentModalOpen(true)
+  }
+
+  function handleConsentAgree() {
+    setConsentModalOpen(false)
+    const action = pendingRegistration
+    setPendingRegistration(null)
+    if (action === 'email' && formRef.current) {
+      const form = formRef.current
+      const email = (form.elements.namedItem('email') as HTMLInputElement).value.trim()
+      const password = (form.elements.namedItem('password') as HTMLInputElement).value
+      formRef.current = null
+      if (email && password) doEmailSignup(email, password)
+    } else if (action === 'google') {
+      doGoogleSignup()
+    }
+  }
+
+  function handleConsentClose() {
+    setConsentModalOpen(false)
+    setPendingRegistration(null)
   }
 
   const busy = loading || isSubmitting
@@ -190,6 +225,12 @@ export default function RegisterPage() {
         </p>
         </div>
       </div>
+      <ConsentModal
+        open={consentModalOpen}
+        content={consentContent}
+        onClose={handleConsentClose}
+        onAgree={handleConsentAgree}
+      />
       <Toast
         open={!!toastMsg}
         onOpenChange={hideToast}
