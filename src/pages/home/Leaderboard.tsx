@@ -81,7 +81,7 @@ export function Leaderboard() {
     <div className="mx-auto w-full max-w-2xl">
       <div className="flex flex-col gap-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-lg font-semibold tracking-tight text-gray-900">Top10 Leaderboard</h3>
+          <h3 className="text-lg font-semibold tracking-tight text-gray-900">Leaderboard</h3>
           <div className="flex rounded-lg border border-amber-100 bg-white p-0.5 shadow-sm">
             {SORT_OPTIONS.map((opt) => (
               <button
