@@ -10,15 +10,20 @@ import { usePlayer } from '../player'
 import PreviewIcon from './PreviewIcon'
 import { SongPreview } from './SongPreview'
 
+export type SongPreviewModalMode = 'play' | 'challenge'
+
 type ModalProps = {
   show: boolean
   onClose: () => void
   songMeta?: SongMetadata
+  /** 'play' = Practice a song (go to /play). 'challenge' = Take a challenge (go to /challenge). */
+  mode?: SongPreviewModalMode
 }
 export default function SongPreviewModal({
   show = true,
   onClose = () => {},
   songMeta = undefined,
+  mode = 'play',
 }: ModalProps) {
   const { title, id, source } = songMeta ?? {}
   const player = usePlayer()
@@ -28,7 +33,12 @@ export default function SongPreviewModal({
   const trackCount = song ? Object.keys(song.tracks).length : undefined
   const noteCount = song?.notes.length
   const playSongSearch = id && source ? createSearchParams({ id, source }).toString() : ''
+  const challengePath =
+    id && source
+      ? `/challenge?source=${encodeURIComponent(source)}&id=${encodeURIComponent(id)}`
+      : ''
   const { currentTime, duration } = useSongScrubTimes()
+  const isChallenge = mode === 'challenge'
 
   useEventListener<KeyboardEvent>('keydown', (event) => {
     if (!show) return
@@ -39,7 +49,10 @@ export default function SongPreviewModal({
     }
     if (event.key === 'Enter') {
       event.preventDefault()
-      if (playSongSearch) {
+      if (isChallenge && challengePath) {
+        navigate(challengePath)
+        onClose()
+      } else if (playSongSearch) {
         navigate({ pathname: '/play', search: `?${playSongSearch}` })
       }
     }
@@ -62,11 +75,11 @@ export default function SongPreviewModal({
       show={show && !!id}
       onClose={handleClose}
       className="overflow-hidden rounded-2xl bg-transparent p-0"
-      modalClassName="max-w-[1100px] w-[min(96vw,1100px)]"
+      modalClassName="max-w-[1100px] w-[min(96vw,1100px)] max-h-[90dvh] flex flex-col"
     >
-      <div className="flex h-[min(90vh,700px)] w-full bg-white text-left">
+      <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-white text-left lg:h-[min(90vh,700px)] lg:flex-row">
         <div
-          className="relative flex-1 overflow-hidden bg-[#21242b]"
+          className="relative min-h-[200px] flex-1 overflow-hidden bg-[#21242b] lg:min-h-0"
           onClick={() => player.toggle()}
         >
           {!playerState.canPlay && (
@@ -81,7 +94,7 @@ export default function SongPreviewModal({
           )}
           {id && source && <SongPreview songId={id} source={source} />}
         </div>
-        <div className="flex w-[420px] flex-col border-l border-gray-200 bg-white">
+        <div className="flex min-h-0 w-full min-w-0 flex-col border-t border-gray-200 bg-white lg:w-[420px] lg:border-l lg:border-t-0">
           <div className="px-6 pt-6 pb-3">
             <Heading
               className="truncate text-xl leading-tight font-semibold text-gray-900"
@@ -89,7 +102,9 @@ export default function SongPreviewModal({
             >
               {title}
             </Heading>
-            <Text className="mt-2 text-sm font-medium text-gray-500">MIDI Preview</Text>
+            <Text className="mt-2 text-sm font-medium text-gray-500">
+            {isChallenge ? 'Challenge Preview' : 'MIDI Preview'}
+          </Text>
           </div>
           <div className="px-6 pb-6">
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
@@ -135,16 +150,23 @@ export default function SongPreviewModal({
           <div className="mt-auto border-t border-gray-100 px-6 py-6">
             <Button
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-4 text-lg font-semibold text-white shadow-lg transition hover:bg-violet-500 active:bg-violet-700"
-              onPress={() => navigate({ pathname: '/play', search: `?${playSongSearch}` })}
+              onPress={() => {
+                if (isChallenge && challengePath) {
+                  navigate(challengePath)
+                  onClose()
+                } else {
+                  navigate({ pathname: '/play', search: `?${playSongSearch}` })
+                }
+              }}
             >
-              Play Now
+              {isChallenge ? 'Start Challenge' : 'Play Now'}
             </Button>
             <div className="mt-3 text-center text-xs text-gray-400">
               Press{' '}
               <kbd className="rounded border border-gray-200 bg-gray-100 px-1.5 py-0.5 font-mono text-gray-500">
                 Enter
               </kbd>{' '}
-              to start
+              to {isChallenge ? 'start challenge' : 'start'}
             </div>
           </div>
         </div>

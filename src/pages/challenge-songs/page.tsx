@@ -6,10 +6,11 @@ import {
   listChallengeRecordings,
 } from '@/features/challenge-history'
 import { useSongManifest } from '@/features/data/library'
+import { SongPreviewModal } from '@/features/SongPreview'
 import { getKey } from '@/utils'
 import type { SongMetadata, SongSource } from '@/types'
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useParams } from 'react-router'
 
 type ChallengedItem = {
   source: SongSource
@@ -22,10 +23,10 @@ type ChallengedItem = {
 export default function ChallengeSongsPage() {
   const { user, loading: authLoading } = useRequireAuth('challenge-songs')
   const { userId: routeUserId } = useParams<{ userId: string }>()
-  const navigate = useNavigate()
   const songs = useSongManifest()
   const [recordings, setRecordings] = useState<ChallengedItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [selectedForPreview, setSelectedForPreview] = useState<SongMetadata | null>(null)
 
   const songMap = useMemo(() => {
     const m = new Map<string, SongMetadata>()
@@ -77,13 +78,19 @@ export default function ChallengeSongsPage() {
     )
   }
 
-  const goChallenge = (source: SongSource, id: string) => {
-    navigate(`/challenge?source=${encodeURIComponent(source)}&id=${encodeURIComponent(id)}`)
+  const openPreview = (meta: SongMetadata) => {
+    setSelectedForPreview(meta)
   }
 
   return (
     <>
       <title>Take a challenge</title>
+      <SongPreviewModal
+        show={!!selectedForPreview}
+        songMeta={selectedForPreview ?? undefined}
+        onClose={() => setSelectedForPreview(null)}
+        mode="challenge"
+      />
       <div className="flex min-h-screen flex-col bg-paper bg-amber-50/70">
         <AppBar />
         <div className="mx-auto flex min-h-0 w-full max-w-(--breakpoint-lg) flex-1 flex-col p-6">
@@ -133,7 +140,18 @@ export default function ChallengeSongsPage() {
                     {recordings.map((r) => (
                       <tr
                         key={getKey(r.id, r.source)}
-                        onClick={() => goChallenge(r.source, r.id)}
+                        onClick={() =>
+                          openPreview(
+                            songMap.get(getKey(r.id, r.source)) ?? {
+                              id: r.id,
+                              source: r.source,
+                              title: r.title,
+                              file: '',
+                              difficulty: 0,
+                              duration: 0,
+                            },
+                          )
+                        }
                         className="cursor-pointer border-b border-amber-50 transition-colors hover:bg-amber-50/50"
                       >
                         <td className="truncate px-4 py-2.5 font-medium text-gray-900">
@@ -188,7 +206,7 @@ export default function ChallengeSongsPage() {
                     {recommended.map((s) => (
                       <tr
                         key={getKey(s.id, s.source)}
-                        onClick={() => goChallenge(s.source, s.id)}
+                        onClick={() => openPreview(s)}
                         className="cursor-pointer border-b border-amber-50 transition-colors hover:bg-amber-50/50"
                       >
                         <td className="truncate px-4 py-2.5 font-medium text-gray-900">
