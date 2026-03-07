@@ -14,13 +14,13 @@ export default function Home() {
         <AppBar />
         <div className="bg-paper bg-amber-50/70 border-b border-amber-100">
           <div className="mx-auto w-full max-w-(--breakpoint-lg) px-6 py-10">
-            <div className="grid items-center gap-8 md:grid-cols-[1.1fr_0.9fr]">
-              <div className="flex flex-col gap-4 text-center md:text-left">
+            <div className="grid items-center gap-8 lg:grid-cols-[1.1fr_0.9fr]">
+              <div className="flex flex-col gap-4 text-center lg:text-left">
                 <h1 className="text-responsive-xxl font-bold text-gray-900">AI powered piano learning journey</h1>
                 <h3 className="text-responsive-xl text-gray-600">
                   Plug in your MIDI keyboard and see your progress <br />Compete with your friends
                 </h3>
-                <div className="flex flex-wrap justify-center gap-3 md:justify-start">
+                <div className="flex flex-wrap justify-center gap-3 lg:justify-start">
                   <Link to={user ? `/challenge-songs/${user.id}` : '/challenge-songs'}>
                     <Button className="bg-gray-800 text-white shadow-sm hover:bg-gray-700 active:bg-gray-900 active:shadow-inner">
                       Take a challenge
@@ -38,7 +38,7 @@ export default function Home() {
                   </Link>
                 </div>
               </div>
-              <div className="flex justify-center md:justify-end">
+              <div className="flex justify-center lg:justify-end">
                 <div className="w-full rounded-2xl shadow-[0_18px_40px_rgba(17,24,39,0.35)]">
                   <FeaturedSongsPreview className="w-full" />
                 </div>

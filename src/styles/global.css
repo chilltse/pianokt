@@ -16,6 +16,7 @@
 }
 
 @theme {
+  /* Use lg (1024px) for mobile/desktop layout switch so iPad (768–1024px) gets mobile layout */
   --breakpoint-*: initial;
   --breakpoint-sm: 640px;
   --breakpoint-md: 768px;
@@ -90,11 +91,20 @@
   html {
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
+    width: 100%;
+    min-width: 0;
+    /* Prevent iOS from inflating font size (causes “zoomed” layout in portrait) */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
   body {
     overflow-x: hidden;
     max-width: 100%;
+    min-width: 0;
     min-height: 100dvh;
+    /* Keep layout at 1:1 on iPad Chrome portrait so full page is visible */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
 }
 
@@ -157,8 +167,8 @@
     min-height: calc(100dvh - var(--safe-area-inset-top) - var(--safe-area-inset-bottom));
   }
 
-  /* Scrollbar compensation only on desktop; 100vw on iOS can exceed viewport and cause overflow */
-  @media (min-width: 768px) {
+  /* Scrollbar compensation only on desktop (lg+); tablet/iPad use mobile layout */
+  @media (min-width: 1024px) {
     .appbar-scrollbar-pad {
       padding-left: calc(100vw - 100%);
     }

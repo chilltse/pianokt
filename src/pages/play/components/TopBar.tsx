@@ -48,7 +48,7 @@ export default function TopBar({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-4 md:gap-8">
+        <div className="flex items-center gap-4 lg:gap-8">
           <ButtonWithTooltip
             tooltip={statsVisible ? 'Hide Stats' : 'Show Stats'}
             isActive={statsVisible}

@@ -21,7 +21,7 @@ export default function AboutPage() {
       <AppBar />
       <div className="bg-paper bg-amber-50/70">
         <div className="mx-auto flex max-w-(--breakpoint-lg)">
-          <div className="sticky top-0 hidden max-h-screen p-8 md:block">
+          <div className="sticky top-0 hidden max-h-screen p-8 lg:block">
             <section className="mx-auto flex flex-col">
               <h2 className="text-3xl">About</h2>
               <Sizer height={32} />
@@ -79,9 +79,13 @@ function WhatSection() {
       first="pianoKT is a free and open-source webapp for learning to play Piano."
     >
       <p>
-        pianoKT is great for beginners – you can play songs without needing to learn sheet music.
-        pianoKT creates an intuitive <span className="italic">Falling Notes</span> visualization
+        pianoKT is great for piano lovers, you can take a challenge and analyse the skill status and get the most fit recommendations.
+        pianoKT has an intuitive <span className="italic">Falling Notes</span> visualization
         of a song, similar to rhythm games like Guitar Hero.
+
+        Thanks to the Sightread team for the skeleton of the app.
+
+        This project is also a research project of Australian National University, your midi-recording data will be fully anonymised and used for the research purpose. Your contribution is greatly appreciated by the community and we work hard to present the research results in the future.
       </p>
       <Sizer height={8} />
       <CaptionedImage

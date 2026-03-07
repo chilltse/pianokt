@@ -26,8 +26,8 @@ export default function AppBar() {
     <div
       className="appbar-scrollbar-pad relative flex h-[50px] min-h-[50px] flex-col justify-center bg-white border-b border-gray-200 shadow-sm"
     >
-      <div className="mx-auto flex w-full items-center justify-center pl-6 md:max-w-(--breakpoint-lg)">
-        <div className="pointer-events-none absolute top-1/2 right-5 left-5 z-10 flex -translate-y-1/2 items-center justify-between md:hidden">
+      <div className="mx-auto flex w-full items-center justify-center pl-6 lg:max-w-(--breakpoint-lg)">
+        <div className="pointer-events-none absolute top-1/2 right-5 left-5 z-10 flex -translate-y-1/2 items-center justify-between lg:hidden">
           <div className="pointer-events-auto">
             <SmallWindowNav />
           </div>
@@ -43,7 +43,7 @@ export default function AppBar() {
           <Sizer width={8} />
           <span className="text-2xl font-extralight">PIANO KT</span>
         </Link>
-        <div className="hidden grow justify-evenly gap-6 pl-16 align-baseline whitespace-nowrap md:flex">
+        <div className="hidden grow justify-evenly gap-6 pl-16 align-baseline whitespace-nowrap lg:flex">
           {navItems.map((nav) => {
             const to =
               nav.route === '/challenge-songs' && auth?.user

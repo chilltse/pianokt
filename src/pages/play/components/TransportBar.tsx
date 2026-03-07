@@ -91,8 +91,8 @@ export default function TransportBar({
             Measure {measure}
           </span>
         </div>
-        <div className="hidden h-6 w-px bg-[#2a2b32] md:block" />
-        <div className="hidden items-center gap-2 md:flex">
+        <div className="hidden h-6 w-px bg-[#2a2b32] lg:block" />
+        <div className="hidden items-center gap-2 lg:flex">
           <TogglePill
             isActive={isMetronomeOn}
             label="Metronome"
