@@ -68,11 +68,11 @@ function WhatSection() {
   return (
     <Article
       header="What"
-      first="pianoKT is a free and open-source webapp for learning to play Piano."
+      first="PianoKT is a free and open-source webapp for learning to play piano."
     >
       <p>
-        pianoKT is great for piano lovers, you can take a challenge and analyse the skill status and get the most fit recommendations.
-        pianoKT has an intuitive <span className="italic">Falling Notes</span> visualization
+        PianoKT is great for piano lovers, you can take a challenge and analyse the skill status and get the most fit recommendations.
+        PianoKT has an intuitive <span className="italic">Falling Notes</span> visualization
         of a song, similar to rhythm games like Guitar Hero.
       </p>
       <p>
@@ -116,8 +116,8 @@ function GettingStarted() {
   return (
     <Article header="Getting started" first="Plug in a keyboard. Start slow. Gradually speed up.">
       <p>
-        When initially learning a song, we recommend learning left and right hands separately. You
-        should also take advantage of the BPM modifier to slow down a song by at least 50%. It is
+        When initially learning a song, we rececommend you to start with <strong>Practice a song</strong>.
+        You should also take advantage of the BPM modifier to slow down a song by at least 50%. It is
         significantly more helpful to hit the right notes with good form and slowly build up speed
         than to frantically practice at full speed and build bad habits. This is especially true
         when combining hands.
@@ -127,10 +127,10 @@ function GettingStarted() {
         the song will wait for you to hit the right key before progressing.
       </p>
       <p>
-        PianoKT works best in conjunction with a Piano teacher. Falling notes will allow you to
-        have more fun with less experience, but it is no replacement for formal education. Learning
-        music theory will help you get a more holistic music experience than learning solely
-        learning how to play songs.
+        When you feel you are ready to take a challenge, you can go to the <strong>Take a challenge</strong> page and take a challenge.
+        The challenge will be a set of songs that are designed to test your skills.
+        You will be given a score based on your performance.
+        Your performance will also be used to determine your skill level and the most fit recommendations.
       </p>
     </Article>
   )
