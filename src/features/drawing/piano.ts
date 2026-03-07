@@ -46,7 +46,10 @@ export function getPianoRollMeasurements(
   }
 
   const whiteWidth = width / whiteKeysCount
-  const whiteHeight = Math.floor(Math.min(5 * whiteWidth, 250)) // max-height: 250
+  // Min 48px so keyboard stays tappable on narrow mobile screens
+  const whiteHeight = Math.floor(
+    Math.max(48, Math.min(5 * whiteWidth, 250)),
+  ) // max-height: 250
   const blackWidth = whiteWidth / 2
   const blackHeight = Math.floor(whiteHeight * (2 / 3))
   const whiteNoteSeparation = whiteWidth / 20
