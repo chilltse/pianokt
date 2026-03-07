@@ -24,13 +24,7 @@ export default function AppBar() {
 
   return (
     <div
-      className="relative flex h-[50px] min-h-[50px] flex-col justify-center bg-white border-b border-gray-200 shadow-sm"
-      style={{
-        // This is a hack that accounts for the sometimes present scrollbar.
-        // The 100vw includes scrollbar and the 100% does not, so we padLeft the difference.
-        // Credit goes to: https://aykevl.nl/2014/09/fix-jumping-scrollbar
-        paddingLeft: 'calc(100vw - 100%)',
-      }}
+      className="appbar-scrollbar-pad relative flex h-[50px] min-h-[50px] flex-col justify-center bg-white border-b border-gray-200 shadow-sm"
     >
       <div className="mx-auto flex w-full items-center justify-center pl-6 md:max-w-(--breakpoint-lg)">
         <div className="pointer-events-none absolute top-1/2 right-5 left-5 z-10 flex -translate-y-1/2 items-center justify-between md:hidden">

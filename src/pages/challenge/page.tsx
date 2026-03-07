@@ -337,7 +337,7 @@ export default function ChallengePage() {
     <>
       <title>Challenge</title>
       <div
-        className={clsx('fixed grid w-screen grid-rows-[auto_1fr_auto] outline-none h-[100dvh] h-screen')}
+        className={clsx('fixed inset-safe grid h-full w-full grid-rows-[auto_1fr_auto] outline-none min-h-0')}
         {...midiState.getListenerProps()}
         autoFocus
       >

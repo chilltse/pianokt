@@ -83,8 +83,10 @@ export default function SpeedTraining({}: Props) {
       <div
         style={{
           backgroundColor: 'white',
-          width: '100vw',
-          height: `calc(100vh - 55px)`,
+          width: '100%',
+          left: 0,
+          right: 0,
+          height: 'calc(100dvh - 55px)',
           position: 'fixed',
           top: 55,
           display: 'flex',

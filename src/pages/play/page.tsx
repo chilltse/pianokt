@@ -88,7 +88,7 @@ function SongNotFound({ songTitle, onGoBack }: { songTitle?: string; onGoBack: (
         )}
         <p className="mb-6 text-sm text-gray-500">
           Please check that the file still exists or try selecting a different song. It may also be
-          that Sightread lost access to your local files. If that's the case, please re-scan
+          that PianoKT lost access to your local files. If that's the case, please re-scan
           directories in the "Manage Folders" menu.
         </p>
         <button
@@ -395,7 +395,7 @@ export default function PlaySongPage() {
     <>
       <title>Playing</title>
       <div
-        className={clsx('fixed grid h-screen w-screen grid-rows-[auto_1fr_auto] outline-none')}
+        className={clsx('fixed inset-safe grid h-full w-full grid-rows-[auto_1fr_auto] outline-none min-h-0')}
         {...midiState.getListenerProps()}
         autoFocus
       >
@@ -437,7 +437,7 @@ export default function PlaySongPage() {
             </div>
           )}
           {!isRecording && isSettingsOpen ? (
-            <div className="absolute top-0 right-0 h-full w-[360px] border-l border-[#2b2a33] bg-[#121016] shadow-2xl">
+            <div className="absolute top-0 right-0 h-full w-full max-w-[360px] border-l border-[#2b2a33] bg-[#121016] shadow-2xl">
               <SettingsPanel
                 onChange={setSongConfig}
                 config={songConfig}

@@ -11,17 +11,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 
         <title>Piano KT</title>
-        <meta name="author" content="Jake Fried" />
-        <meta name="description" content="app for learning piano" />
+        <meta name="author" content="Nanxuan Xie" />
+        <meta name="description" content="app for learning piano with AI powered knowledge tracing" />
 
         {/* Open Graph */}
-        <meta property="og:title" content="Sightread" />
-        <meta property="og:site_name" content="Sightread" />
-        <meta property="og:description" content="app for learning piano" />
+        <meta property="og:title" content="Piano KT" />
+        <meta property="og:site_name" content="Piano KT" />
+        <meta property="og:description" content="app for learning piano with AI powered knowledge tracing" />
         <meta property="og:image" content="/images/mode_falling_notes_screenshot.png" />
         <meta
           property="og:image:alt"
-          content="Sightread demo displaying falling notes visualization"
+          content="Demo displaying falling notes visualization"
         />
 
         {/* Twitter */}
@@ -32,7 +32,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         />
         <meta
           name="twitter:image:alt"
-          content="Sightread demo displaying falling notes visualization"
+          content="Demo displaying falling notes visualization"
         />
 
         {/* Favicons */}

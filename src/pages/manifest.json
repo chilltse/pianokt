@@ -1,6 +1,6 @@
 {
-  "name": "Sightread",
-  "short_name": "sightread",
+  "name": "pianoKT",
+  "short_name": "pianoKT",
   "description": "app for learning piano",
   "start_url": "/",
   "display": "standalone",

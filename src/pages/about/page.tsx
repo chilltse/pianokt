@@ -76,11 +76,11 @@ function WhatSection() {
   return (
     <Article
       header="What"
-      first="Sightread is a free and open-source webapp for learning to play Piano."
+      first="pianoKT is a free and open-source webapp for learning to play Piano."
     >
       <p>
-        Sightread is great for beginners – you can play songs without needing to learn sheet music.
-        Sightread creates an intuitive <span className="italic">Falling Notes</span> visualization
+        pianoKT is great for beginners – you can play songs without needing to learn sheet music.
+        pianoKT creates an intuitive <span className="italic">Falling Notes</span> visualization
         of a song, similar to rhythm games like Guitar Hero.
       </p>
       <Sizer height={8} />
@@ -93,12 +93,12 @@ function WhatSection() {
       />
       <Sizer height={24} />
       <p>
-        For those who want to learn sheet music, Sightread offers{' '}
+        For those who want to learn sheet music, PianoKT offers{' '}
         <span className="italic">Sheet Hero (beta)</span> mode. Sheet Hero is a halfway point
         between the simplicity of falling notes and the full complexity of sheet music. Notes are
         laid out on a musical staff, but timing is simplified. Sheet Hero represents the duration of
         notes with a tail instead of beat denominations. Key signatures are also optional in this
-        mode. Sightread will by default display a song in it’s original key, but you may change the
+        mode. PianoKT will by default display a song in it’s original key, but you may change the
         key to any that you prefer.
       </p>
       <Sizer height={8} />
@@ -127,7 +127,7 @@ function GettingStarted() {
         the song will wait for you to hit the right key before progressing.
       </p>
       <p>
-        Sightread works best in conjunction with a Piano teacher. Falling notes will allow you to
+        PianoKT works best in conjunction with a Piano teacher. Falling notes will allow you to
         have more fun with less experience, but it is no replacement for formal education. Learning
         music theory will help you get a more holistic music experience than learning solely
         learning how to play songs.
@@ -140,10 +140,10 @@ function MusicSelectionSection() {
   return (
     <Article
       header="Music selection"
-      first="The Sightread catalog has two components: builtin and local file uploads."
+      first="The PianoKT catalog has two components: builtin and local file uploads."
     >
-      <p>Sightread includes music from the public domain.</p>
-      <p>You can upload MIDI files directly to Sightread which saves them in browser storage.</p>
+      <p>PianoKT includes music from the public domain.</p>
+      <p>You can upload MIDI files directly to PianoKT which saves them in browser storage.</p>
     </Article>
   )
 }
@@ -152,7 +152,7 @@ function BrowserCompatibilitySection() {
   return (
     <Article
       header="Browser compatibility"
-      first="Sightread is fully compatible with the latest versions of Chrome and Firefox."
+      first="PianoKT is fully compatible with the latest versions of Chrome and Firefox."
     >
       <p>
         Plugging in a MIDI keyboard will not work on iOS or Safari. This is because Apple has not
@@ -190,8 +190,8 @@ function FeedbackSection() {
     <Article header="Feedback">
       <p>
         Found a bug or have a feature request? Please file an issue on{' '}
-        <AboutLink to="https://github.com/sightread/sightread/issues">GitHub</AboutLink> or send an{' '}
-        <AboutLink to="mailto:sightreadllc@gmail.com">email</AboutLink>.
+        <AboutLink to="https://github.com/PianoKT/PianoKT/issues">GitHub</AboutLink> or send an{' '}
+        <AboutLink to="mailto:PianoKTllc@gmail.com">email</AboutLink>.
       </p>
     </Article>
   )
@@ -201,24 +201,24 @@ function ProductRecommendations() {
   return (
     <Article
       header="Product recommendations"
-      first="Looking for a Sightread-compatible keyboard? We've got you covered."
+      first="Looking for a PianoKT-compatible keyboard? We've got you covered."
     >
       <p>
-        Sightread needs a keyboard with MIDI-out, usually via USB or Bluetooth. We recommend opting
-        for USB connection because Sightread is latency-sensitive.
+        PianoKT needs a keyboard with MIDI-out, usually via USB or Bluetooth. We recommend opting
+        for USB connection because PianoKT is latency-sensitive.
       </p>
 
       <ol className="ml-8 list-disc">
         <li>
           <b>Beginner:</b> The{' '}
-          <AboutLink to="https://www.amazon.com/Casio-61-Key-Portable-Keyboard-LK-S250/dp/B07WK7F7BF?ref_=ast_sto_dp&amp;th=1&_encoding=UTF8&tag=sightread-20&linkCode=ur2&linkId=19d0e41a202a32254091e6bafcae1b13&camp=1789&creative=9325">
+          <AboutLink to="https://www.amazon.com/Casio-61-Key-Portable-Keyboard-LK-S250/dp/B07WK7F7BF?ref_=ast_sto_dp&amp;th=1&_encoding=UTF8&tag=PianoKT-20&linkCode=ur2&linkId=19d0e41a202a32254091e6bafcae1b13&camp=1789&creative=9325">
             Casio Casiotone LK-S250
           </AboutLink>{' '}
           has 66 light-up keys which can aid learning.
         </li>
         <li>
           <b>Intermediate:</b> The{' '}
-          <AboutLink to="https://www.amazon.com/Roland-keys-Digital-Piano-GO-88P/dp/B07M9WFSTK?th=1&_encoding=UTF8&tag=sightread-20&linkCode=ur2&linkId=1318072a32a3ea63d98c4567c2ed3098&camp=1789&creative=9325">
+          <AboutLink to="https://www.amazon.com/Roland-keys-Digital-Piano-GO-88P/dp/B07M9WFSTK?th=1&_encoding=UTF8&tag=PianoKT-20&linkCode=ur2&linkId=1318072a32a3ea63d98c4567c2ed3098&camp=1789&creative=9325">
             Roland GO:Piano
           </AboutLink>{' '}
           has a full range of 88 keys with both Bluetooth and USB connections. It has excellent
