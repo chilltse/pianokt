@@ -227,6 +227,7 @@ export default function ChallengePage() {
   const emitPlayEvent = async (
     eventType: PlayEventType,
     metadata: Record<string, unknown> = {},
+    songTimeSecOverride?: number,
   ): Promise<void> => {
     const sessionId = playSessionIdRef.current
     if (!sessionId) return
@@ -238,7 +239,7 @@ export default function ChallengePage() {
         exerciseId: `challenge:${id}`,
         playMode: 'challenge',
         eventType,
-        songTimeSec: nowSongSec(),
+        songTimeSec: songTimeSecOverride ?? nowSongSec(),
         metadata: {
           source,
           song_duration_sec: getSongDurationSec(),
@@ -308,31 +309,34 @@ export default function ChallengePage() {
     })
   }
 
-  const handleExitChallenge = (reason: 'back_button' | 'confirm_exit') => {
+  const handleExitChallenge = async (reason: 'back_button' | 'confirm_exit') => {
     pausedByUserRef.current = true
     markPlayingStopped()
 
     const hasSession = !!playSessionIdRef.current
+    const terminalSongTime = nowSongSec()
     const dur = lastDurationRef.current || ((player as any).getDuration?.() ?? 0)
-    const midiBytes = stopRecording(nowSongSec(), dur > 0 ? dur : undefined)
+    const midiBytes = stopRecording(terminalSongTime, dur > 0 ? dur : undefined)
     const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
     const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
 
     if (hasSession) {
-      void (async () => {
-        const recordingId = await saveChallengeRecordingFromBytes({
-          midiBytes,
-          durationSec: dur > 0 ? dur : 1,
-          accuracy,
-        })
-        await emitPlayEvent('exited', {
+      const recordingId = await saveChallengeRecordingFromBytes({
+        midiBytes,
+        durationSec: dur > 0 ? dur : 1,
+        accuracy,
+      })
+      await emitPlayEvent(
+        'exited',
+        {
           reason,
           accuracy_pct: accuracy,
           challenge_recording_id: recordingId,
-          song_time_sec: nowSongSec(),
-        })
-        resetPlaySessionTracking()
-      })()
+          song_time_sec: terminalSongTime,
+        },
+        terminalSongTime,
+      )
+      resetPlaySessionTracking()
     } else {
       resetPlaySessionTracking()
     }
@@ -426,7 +430,8 @@ export default function ChallengePage() {
       }
 
       const dur = lastDurationRef.current || ((player as any).getDuration?.() ?? 0)
-      const midiBytes = stopRecording(nowSongSec(), dur > 0 ? dur : undefined)
+      const terminalSongTime = nowSongSec()
+      const midiBytes = stopRecording(terminalSongTime, dur > 0 ? dur : undefined)
       const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
       const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
       const succeeded = isChallengeSuccess(accuracy)
@@ -444,8 +449,8 @@ export default function ChallengePage() {
           success: succeeded,
           accuracy_pct: accuracy,
           challenge_recording_id: recordingId,
-          song_time_sec: nowSongSec(),
-        })
+          song_time_sec: terminalSongTime,
+        }, terminalSongTime)
         resetPlaySessionTracking()
       })()
     }
@@ -493,7 +498,7 @@ export default function ChallengePage() {
           title={songMeta?.title}
           subtitle="Challenge"
           onClickBack={() => {
-            handleExitChallenge('back_button')
+            void handleExitChallenge('back_button')
           }}
           onClickMidi={() => {
             showToast('MIDI selection is disabled in challenge mode.')
@@ -577,7 +582,7 @@ export default function ChallengePage() {
                 className="px-3 py-1.5 text-xs rounded bg-red-600"
                 onClick={() => {
                   setIsConfirmExitOpen(false)
-                  handleExitChallenge('confirm_exit')
+                  void handleExitChallenge('confirm_exit')
                 }}
               >
                 Exit
