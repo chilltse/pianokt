@@ -1,5 +1,11 @@
 import { supabase } from '@/features/auth/supabase'
-import type { ChallengeRecordingRow, LeaderboardEntry } from '@/features/challenge-history/types'
+import type {
+  ChallengeRecordingRow,
+  LeaderboardEntry,
+  PlayEventType,
+  PlayMode,
+  UserPlayLogRow,
+} from '@/features/challenge-history/types'
 
 const BUCKET = 'challenge-recordings'
 
@@ -98,6 +104,55 @@ export async function listChallengeRecordings(): Promise<
 
   if (error) return { error: error.message }
   return { data: (data ?? []) as ChallengeRecordingRow[] }
+}
+
+export async function logPlayEvent(params: {
+  sessionId: string
+  songId: string
+  exerciseId?: string | null
+  playMode: PlayMode
+  eventType: PlayEventType
+  songTimeSec?: number | null
+  clientTs?: string
+  metadata?: Record<string, unknown>
+}): Promise<{ ok: true } | { error: string }> {
+  if (!supabase) return { error: 'Supabase not configured' }
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+
+  const { error } = await supabase.rpc('log_play_event', {
+    p_event_id: crypto.randomUUID(),
+    p_session_id: params.sessionId,
+    p_song_id: params.songId,
+    p_exercise_id: params.exerciseId ?? null,
+    p_play_mode: params.playMode,
+    p_event_type: params.eventType,
+    p_song_time_sec: params.songTimeSec ?? null,
+    p_client_ts: params.clientTs ?? new Date().toISOString(),
+    p_metadata: params.metadata ?? {},
+  })
+  if (error) return { error: error.message }
+
+  return { ok: true }
+}
+
+export async function finalizeUserPlayLog(sessionId: string): Promise<{ ok: true } | { error: string }> {
+  if (!supabase) return { error: 'Supabase not configured' }
+  const { error } = await supabase.rpc('upsert_user_play_log', { p_session_id: sessionId })
+  if (error) return { error: error.message }
+  return { ok: true }
+}
+
+export async function listUserPlayLogs(): Promise<{ data: UserPlayLogRow[] } | { error: string }> {
+  if (!supabase) return { error: 'Supabase not configured' }
+  const { data, error } = await supabase
+    .from('user_play_logs')
+    .select('*')
+    .order('created_at', { ascending: false })
+
+  if (error) return { error: error.message }
+  return { data: (data ?? []) as UserPlayLogRow[] }
 }
 
 const CHALLENGE_SUCCESS_PCT = 90

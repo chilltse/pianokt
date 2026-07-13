@@ -1,5 +1,11 @@
 import Toast from '@/components/Toast'
-import { isChallengeSuccess, saveChallengeRecording } from '@/features/challenge-history'
+import {
+  finalizeUserPlayLog,
+  isChallengeSuccess,
+  logPlayEvent,
+  saveChallengeRecording,
+} from '@/features/challenge-history'
+import type { PlayEventType } from '@/features/challenge-history'
 import { useSong } from '@/features/data'
 import { useSongMetadata } from '@/features/data/library'
 import midiState, { getMidiInputs, useSegmentedRecordMidi } from '@/features/midi'
@@ -85,6 +91,9 @@ export default function ChallengePage() {
   const [toastMsg, setToastMsg] = useState<string | null>('')
   const [toastKey, setToastKey] = useState<string>('')
   const toastKeyRef = useRef(toastKey)
+  const playSessionIdRef = useRef<string | null>(null)
+  const playStartedAtMsRef = useRef<number | null>(null)
+  const accumulatedPlayMsRef = useRef(0)
   const { currentTime, duration } = useSongScrubTimes()
 
   const range = useAtomValue(player.getRange())
@@ -185,6 +194,75 @@ export default function ChallengePage() {
     })
   }
 
+  const getSongDurationSec = () => {
+    const dur = (player as any).getDuration?.() ?? lastDurationRef.current ?? 0
+    return typeof dur === 'number' && Number.isFinite(dur) && dur > 0 ? dur : 0
+  }
+
+  const markPlayingStarted = () => {
+    if (playStartedAtMsRef.current == null) {
+      playStartedAtMsRef.current = performance.now()
+    }
+  }
+
+  const markPlayingStopped = () => {
+    if (playStartedAtMsRef.current == null) return
+    accumulatedPlayMsRef.current += performance.now() - playStartedAtMsRef.current
+    playStartedAtMsRef.current = null
+  }
+
+  const getTimePlayingSec = () => {
+    let elapsedMs = accumulatedPlayMsRef.current
+    if (playStartedAtMsRef.current != null) {
+      elapsedMs += performance.now() - playStartedAtMsRef.current
+    }
+    return Math.max(0, elapsedMs / 1000)
+  }
+
+  const resetPlaySessionTracking = () => {
+    playSessionIdRef.current = null
+    playStartedAtMsRef.current = null
+    accumulatedPlayMsRef.current = 0
+  }
+
+  const emitPlayEvent = (eventType: PlayEventType, metadata: Record<string, unknown> = {}) => {
+    const sessionId = playSessionIdRef.current
+    if (!sessionId) return
+
+    logPlayEvent({
+      sessionId,
+      songId: id,
+      exerciseId: `challenge:${id}`,
+      playMode: 'challenge',
+      eventType,
+      songTimeSec: nowSongSec(),
+      metadata: {
+        source,
+        song_duration_sec: getSongDurationSec(),
+        time_playing_sec: Number(getTimePlayingSec().toFixed(3)),
+        difficulty: songMeta?.difficulty ?? null,
+        ...metadata,
+      },
+    }).then((result) => {
+      if ('error' in result && result.error !== 'Not authenticated') {
+        console.warn(`[challenge-events] failed to log ${eventType}:`, result.error)
+      }
+    }).catch((error) => {
+      console.warn(`[challenge-events] failed to log ${eventType}:`, error)
+    })
+  }
+
+  const finalizeCurrentPlaySession = (sessionId: string | null) => {
+    if (!sessionId) return
+    finalizeUserPlayLog(sessionId).then((result) => {
+      if ('error' in result && result.error !== 'Not authenticated') {
+        console.warn('[challenge-events] failed to finalize play log:', result.error)
+      }
+    }).catch((error) => {
+      console.warn('[challenge-events] failed to finalize play log:', error)
+    })
+  }
+
   const handleMetronomeToggle = () => {
     const enabled = !metronome.enabled
     const nextVolume = metronome.volume ?? 0.6
@@ -203,12 +281,21 @@ export default function ChallengePage() {
     const isPlayingNow = playerState.playing
 
     if (!isPlayingNow) {
+      const isNewSession = !playSessionIdRef.current
+      if (isNewSession) {
+        playSessionIdRef.current = crypto.randomUUID()
+        accumulatedPlayMsRef.current = 0
+      }
+      markPlayingStarted()
+      emitPlayEvent(isNewSession ? 'play_started' : 'resumed')
       // Start
       startOrResumeRecording(nowSongSec())
       player.play()
     } else {
       // Pause: only pause recording and playback; show "Continue or Exit?" dialog (not the complete modal)
       pausedByUserRef.current = true
+      markPlayingStopped()
+      emitPlayEvent('paused')
       pauseRecording(nowSongSec())
       player.pause()
       setIsConfirmExitOpen(true)
@@ -220,6 +307,14 @@ export default function ChallengePage() {
     evt.preventDefault()
     if (isConfirmExitOpen) {
       setIsConfirmExitOpen(false)
+      if (!playSessionIdRef.current) {
+        playSessionIdRef.current = crypto.randomUUID()
+        accumulatedPlayMsRef.current = 0
+        emitPlayEvent('play_started')
+      } else {
+        emitPlayEvent('resumed')
+      }
+      markPlayingStarted()
       startOrResumeRecording(nowSongSec())
       player.play()
       return
@@ -269,8 +364,18 @@ export default function ChallengePage() {
       const midiBytes = stopRecording(nowSongSec(), dur > 0 ? dur : undefined)
       const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
       const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
+      const succeeded = isChallengeSuccess(accuracy)
+      const sessionId = playSessionIdRef.current
 
-      setEndModalVariant(isChallengeSuccess(accuracy) ? 'success' : 'complete')
+      markPlayingStopped()
+      emitPlayEvent('finished', {
+        success: succeeded,
+        accuracy_pct: accuracy,
+      })
+      finalizeCurrentPlaySession(sessionId)
+      resetPlaySessionTracking()
+
+      setEndModalVariant(succeeded ? 'success' : 'complete')
       setShowSuccessModal(true)
 
       if (midiBytes && midiBytes.length > 0) {
@@ -345,6 +450,11 @@ export default function ChallengePage() {
           title={songMeta?.title}
           subtitle="Challenge"
           onClickBack={() => {
+            markPlayingStopped()
+            const sessionId = playSessionIdRef.current
+            emitPlayEvent('exited', { reason: 'back_button' })
+            finalizeCurrentPlaySession(sessionId)
+            resetPlaySessionTracking()
             player.stop()
             navigate('/')
           }}
@@ -422,6 +532,11 @@ export default function ChallengePage() {
                 className="px-3 py-1.5 text-xs rounded bg-red-600"
                 onClick={() => {
                   pausedByUserRef.current = true
+                  markPlayingStopped()
+                  const sessionId = playSessionIdRef.current
+                  emitPlayEvent('exited', { reason: 'confirm_exit' })
+                  finalizeCurrentPlaySession(sessionId)
+                  resetPlaySessionTracking()
                   player.stop()
                   stopRecording(nowSongSec())
                   setIsConfirmExitOpen(false)
