@@ -1,17 +1,3 @@
-export type ChallengeRecordingRow = {
-  id: string
-  user_id: string
-  song_source: string
-  song_id: string
-  song_title: string | null
-  duration_sec: number
-  midi_storage_path: string
-  created_at: string
-  accuracy_pct?: number
-  difficulty?: number
-  midi_keyboard_used?: boolean
-}
-
 export type LeaderboardEntry = {
   rank: number
   user_id: string
@@ -23,14 +9,31 @@ export type LeaderboardEntry = {
 }
 
 export type ChallengeRecording = {
-  id: string
+  sessionId: string
   songSource: string
   songId: string
   songTitle: string | null
   durationSec: number
   createdAt: string
-  /** 用于播放/下载的 URL（signed 或 public）或 base64；由调用方根据 midi_storage_path 解析 */
   midiUrlOrBase64?: string
+}
+
+/** Challenge session row from user_play_logs (replaces challenge_recordings). */
+export type ChallengeRecordingRow = {
+  session_id: string
+  user_id: string
+  song_source: string
+  song_id: string
+  song_title: string | null
+  duration_sec: number | null
+  midi_storage_path: string | null
+  created_at: string
+  accuracy_pct?: number | null
+  difficulty?: number | null
+  midi_keyboard_used?: boolean | null
+  song_time_sec?: number | null
+  time_playing?: number | null
+  exit_status?: PlayExitStatus | null
 }
 
 export type PlayMode = 'challenge' | 'freeplay' | 'training'
@@ -53,11 +56,19 @@ export type UserPlayLogRow = {
   play_mode: PlayMode
   days_since_signup: number | null
   time_playing: number
+  song_time_sec: number | null
   is_played_in_full: boolean
   exit_status: PlayExitStatus
   started_at: string
   ended_at: string
   events_count: number
+  song_source: string | null
+  song_title: string | null
+  duration_sec: number | null
+  midi_storage_path: string | null
+  accuracy_pct: number | null
+  difficulty: number | null
+  midi_keyboard_used: boolean | null
   created_at: string
   updated_at: string
 }

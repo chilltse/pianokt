@@ -50,6 +50,7 @@ export default function RecordingsPage() {
   }, [user?.id])
 
   async function handleDownload(row: ChallengeRecordingRow) {
+    if (!row.midi_storage_path) return
     const url = await getChallengeRecordingDownloadUrl(row.midi_storage_path)
     if (url) {
       const a = document.createElement('a')
@@ -85,7 +86,7 @@ export default function RecordingsPage() {
           <p className="mt-6 text-red-600">{error}</p>
         ) : rows.length === 0 ? (
           <>
-            <p className="mt-6 text-gray-500">No recordings yet. Complete a challenge while logged in to save one.</p>
+            <p className="mt-6 text-gray-500">No recordings yet. Start a challenge while logged in to save one.</p>
             <Link to="/songs" className="mt-4 inline-block text-stone-600 hover:text-stone-800 hover:underline">
               Go to songs
             </Link>
@@ -94,7 +95,7 @@ export default function RecordingsPage() {
           <ul className="mt-6 space-y-3">
             {rows.map((row) => (
               <li
-                key={row.id}
+                key={row.session_id}
                 className="flex items-center justify-between rounded-lg border border-amber-100 bg-white px-4 py-3 shadow-sm"
               >
                 <div className="min-w-0 flex-1">
@@ -102,17 +103,22 @@ export default function RecordingsPage() {
                     {row.song_title || `${row.song_source} / ${row.song_id.slice(0, 12)}…`}
                   </p>
                   <p className="text-xs text-gray-500">
-                    {formatDate(row.created_at)} · {formatDuration(Number(row.duration_sec))}
+                    {formatDate(row.created_at)}
+                    {row.duration_sec != null
+                      ? ` · ${formatDuration(Number(row.duration_sec))}`
+                      : ''}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => handleDownload(row)}
-                  className="ml-4 flex items-center gap-1 rounded-md border border-amber-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-amber-50"
-                >
-                  <Download className="h-4 w-4" />
-                  Download
-                </button>
+                {row.midi_storage_path && (
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(row)}
+                    className="ml-4 flex items-center gap-1 rounded-md border border-amber-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-amber-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    Download
+                  </button>
+                )}
               </li>
             ))}
           </ul>

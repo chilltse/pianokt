@@ -3,7 +3,7 @@ import { useRequireAuth } from '@/features/auth'
 import {
   getBestAccuracyPerSong,
   isChallengeSuccess,
-  listChallengeRecordings,
+  listChallengePlayLogs,
 } from '@/features/challenge-history'
 import { useSongManifest } from '@/features/data/library'
 import { SongPreviewModal } from '@/features/SongPreview'
@@ -37,7 +37,7 @@ export default function ChallengeSongsPage() {
   useEffect(() => {
     if (!user?.id) return
     setLoading(true)
-    listChallengeRecordings().then((result) => {
+    listChallengePlayLogs().then((result) => {
       setLoading(false)
       if ('error' in result) return
       const bestMap = getBestAccuracyPerSong(result.data)
