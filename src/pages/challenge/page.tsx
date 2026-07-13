@@ -1,6 +1,5 @@
 import Toast from '@/components/Toast'
 import {
-  finalizeUserPlayLog,
   isChallengeSuccess,
   logPlayEvent,
   saveChallengeRecording,
@@ -225,42 +224,75 @@ export default function ChallengePage() {
     accumulatedPlayMsRef.current = 0
   }
 
-  const emitPlayEvent = (eventType: PlayEventType, metadata: Record<string, unknown> = {}) => {
+  const emitPlayEvent = async (
+    eventType: PlayEventType,
+    metadata: Record<string, unknown> = {},
+  ): Promise<void> => {
     const sessionId = playSessionIdRef.current
     if (!sessionId) return
 
-    logPlayEvent({
-      sessionId,
-      songId: id,
-      exerciseId: `challenge:${id}`,
-      playMode: 'challenge',
-      eventType,
-      songTimeSec: nowSongSec(),
-      metadata: {
-        source,
-        song_duration_sec: getSongDurationSec(),
-        time_playing_sec: Number(getTimePlayingSec().toFixed(3)),
-        difficulty: songMeta?.difficulty ?? null,
-        ...metadata,
-      },
-    }).then((result) => {
+    try {
+      const result = await logPlayEvent({
+        sessionId,
+        songId: id,
+        exerciseId: `challenge:${id}`,
+        playMode: 'challenge',
+        eventType,
+        songTimeSec: nowSongSec(),
+        metadata: {
+          source,
+          song_duration_sec: getSongDurationSec(),
+          time_playing_sec: Number(getTimePlayingSec().toFixed(3)),
+          difficulty: songMeta?.difficulty ?? null,
+          ...metadata,
+        },
+      })
       if ('error' in result && result.error !== 'Not authenticated') {
         console.warn(`[challenge-events] failed to log ${eventType}:`, result.error)
       }
-    }).catch((error) => {
+    } catch (error) {
       console.warn(`[challenge-events] failed to log ${eventType}:`, error)
-    })
+    }
   }
 
-  const finalizeCurrentPlaySession = (sessionId: string | null) => {
-    if (!sessionId) return
-    finalizeUserPlayLog(sessionId).then((result) => {
-      if ('error' in result && result.error !== 'Not authenticated') {
-        console.warn('[challenge-events] failed to finalize play log:', result.error)
-      }
-    }).catch((error) => {
-      console.warn('[challenge-events] failed to finalize play log:', error)
+  const saveChallengeRecordingFromBytes = async (params: {
+    midiBytes: Uint8Array | null
+    durationSec: number
+    accuracy: number
+  }): Promise<string | null> => {
+    const { midiBytes, durationSec, accuracy } = params
+    if (!midiBytes || midiBytes.length === 0) {
+      console.warn('[Challenge] No MIDI bytes to save recording.')
+      return null
+    }
+
+    const base64 = bytesToBase64(midiBytes)
+    const difficulty = songMeta?.difficulty ?? 0
+
+    const inputs = await getMidiInputs()
+    const midiKeyboardUsed = inputs.size > 0
+
+    const result = await saveChallengeRecording({
+      songSource: source,
+      songId: id,
+      songTitle: songMeta?.title ?? null,
+      durationSec: durationSec > 0 ? durationSec : 1,
+      midiBase64: base64,
+      accuracyPct: accuracy,
+      difficulty,
+      midiKeyboardUsed,
     })
+
+    if ('error' in result) {
+      if (result.error !== 'Not authenticated') {
+        console.error('[Challenge] Failed to save recording:', result.error)
+        showToast(`Save failed: ${result.error}`)
+      }
+      return null
+    }
+
+    showToast('Recording saved.')
+    return result.id
   }
 
   const handleMetronomeToggle = () => {
@@ -276,6 +308,39 @@ export default function ChallengePage() {
     })
   }
 
+  const handleExitChallenge = (reason: 'back_button' | 'confirm_exit') => {
+    pausedByUserRef.current = true
+    markPlayingStopped()
+
+    const hasSession = !!playSessionIdRef.current
+    const dur = lastDurationRef.current || ((player as any).getDuration?.() ?? 0)
+    const midiBytes = stopRecording(nowSongSec(), dur > 0 ? dur : undefined)
+    const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
+    const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
+
+    if (hasSession) {
+      void (async () => {
+        const recordingId = await saveChallengeRecordingFromBytes({
+          midiBytes,
+          durationSec: dur > 0 ? dur : 1,
+          accuracy,
+        })
+        await emitPlayEvent('exited', {
+          reason,
+          accuracy_pct: accuracy,
+          challenge_recording_id: recordingId,
+          song_time_sec: nowSongSec(),
+        })
+        resetPlaySessionTracking()
+      })()
+    } else {
+      resetPlaySessionTracking()
+    }
+
+    player.stop()
+    navigate('/')
+  }
+
   // ✅ 你要的：只要在播放（playing=true）就录音，即使没弹键也要录
   const handleTogglePlayingChallenge = () => {
     const isPlayingNow = playerState.playing
@@ -287,7 +352,7 @@ export default function ChallengePage() {
         accumulatedPlayMsRef.current = 0
       }
       markPlayingStarted()
-      emitPlayEvent(isNewSession ? 'play_started' : 'resumed')
+      void emitPlayEvent(isNewSession ? 'play_started' : 'resumed')
       // Start
       startOrResumeRecording(nowSongSec())
       player.play()
@@ -295,7 +360,7 @@ export default function ChallengePage() {
       // Pause: only pause recording and playback; show "Continue or Exit?" dialog (not the complete modal)
       pausedByUserRef.current = true
       markPlayingStopped()
-      emitPlayEvent('paused')
+      void emitPlayEvent('paused')
       pauseRecording(nowSongSec())
       player.pause()
       setIsConfirmExitOpen(true)
@@ -310,9 +375,9 @@ export default function ChallengePage() {
       if (!playSessionIdRef.current) {
         playSessionIdRef.current = crypto.randomUUID()
         accumulatedPlayMsRef.current = 0
-        emitPlayEvent('play_started')
+        void emitPlayEvent('play_started')
       } else {
-        emitPlayEvent('resumed')
+        void emitPlayEvent('resumed')
       }
       markPlayingStarted()
       startOrResumeRecording(nowSongSec())
@@ -365,46 +430,24 @@ export default function ChallengePage() {
       const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
       const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
       const succeeded = isChallengeSuccess(accuracy)
-      const sessionId = playSessionIdRef.current
 
       markPlayingStopped()
-      emitPlayEvent('finished', {
-        success: succeeded,
-        accuracy_pct: accuracy,
-      })
-      finalizeCurrentPlaySession(sessionId)
-      resetPlaySessionTracking()
-
       setEndModalVariant(succeeded ? 'success' : 'complete')
       setShowSuccessModal(true)
-
-      if (midiBytes && midiBytes.length > 0) {
-        const base64 = bytesToBase64(midiBytes)
-        const durationSec = dur > 0 ? dur : 1
-        const difficulty = songMeta?.difficulty ?? 0
-        getMidiInputs().then((inputs) => {
-          const midiKeyboardUsed = inputs.size > 0
-          return saveChallengeRecording({
-            songSource: source,
-            songId: id,
-            songTitle: songMeta?.title ?? null,
-            durationSec,
-            midiBase64: base64,
-            accuracyPct: accuracy,
-            difficulty,
-            midiKeyboardUsed,
-          })
-        }).then((result) => {
-          if ('error' in result) {
-            if (result.error !== 'Not authenticated') {
-              console.error('[Challenge] Failed to save recording:', result.error)
-              showToast(`Save failed: ${result.error}`)
-            }
-          } else {
-            showToast('Recording saved.')
-          }
+      void (async () => {
+        const recordingId = await saveChallengeRecordingFromBytes({
+          midiBytes,
+          durationSec: dur > 0 ? dur : 1,
+          accuracy,
         })
-      }
+        await emitPlayEvent('finished', {
+          success: succeeded,
+          accuracy_pct: accuracy,
+          challenge_recording_id: recordingId,
+          song_time_sec: nowSongSec(),
+        })
+        resetPlaySessionTracking()
+      })()
     }
 
     previousPlayingRef.current = isPlayingNow
@@ -450,13 +493,7 @@ export default function ChallengePage() {
           title={songMeta?.title}
           subtitle="Challenge"
           onClickBack={() => {
-            markPlayingStopped()
-            const sessionId = playSessionIdRef.current
-            emitPlayEvent('exited', { reason: 'back_button' })
-            finalizeCurrentPlaySession(sessionId)
-            resetPlaySessionTracking()
-            player.stop()
-            navigate('/')
+            handleExitChallenge('back_button')
           }}
           onClickMidi={() => {
             showToast('MIDI selection is disabled in challenge mode.')
@@ -521,6 +558,14 @@ export default function ChallengePage() {
                 className="px-3 py-1.5 text-xs rounded border border-gray-500"
                 onClick={() => {
                   setIsConfirmExitOpen(false)
+                  if (!playSessionIdRef.current) {
+                    playSessionIdRef.current = crypto.randomUUID()
+                    accumulatedPlayMsRef.current = 0
+                    void emitPlayEvent('play_started')
+                  } else {
+                    void emitPlayEvent('resumed')
+                  }
+                  markPlayingStarted()
                   // ✅ Continue：resume 时同样要对齐歌曲时间（补齐静默）
                   startOrResumeRecording(nowSongSec())
                   player.play()
@@ -531,16 +576,8 @@ export default function ChallengePage() {
               <button
                 className="px-3 py-1.5 text-xs rounded bg-red-600"
                 onClick={() => {
-                  pausedByUserRef.current = true
-                  markPlayingStopped()
-                  const sessionId = playSessionIdRef.current
-                  emitPlayEvent('exited', { reason: 'confirm_exit' })
-                  finalizeCurrentPlaySession(sessionId)
-                  resetPlaySessionTracking()
-                  player.stop()
-                  stopRecording(nowSongSec())
                   setIsConfirmExitOpen(false)
-                  navigate('/')
+                  handleExitChallenge('confirm_exit')
                 }}
               >
                 Exit

@@ -53,6 +53,8 @@ export type UserPlayLogRow = {
   play_mode: PlayMode
   days_since_signup: number | null
   time_playing: number
+  song_time_sec: number | null
+  challenge_recording_id: string | null
   is_played_in_full: boolean
   exit_status: PlayExitStatus
   started_at: string
