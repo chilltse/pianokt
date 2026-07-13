@@ -1,6 +1,5 @@
 export {
-  uploadChallengeSessionMidi,
-  listChallengePlayLogs,
+  saveChallengeRecording,
   listChallengeRecordings,
   getChallengeRecordingDownloadUrl,
   fetchLeaderboard,

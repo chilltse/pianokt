@@ -2,7 +2,7 @@ import { AppBar, MarketingFooter, Sizer } from '@/components'
 import { AvatarUploadZone } from '@/components/AvatarUploadZone'
 import { useAuth, useRequireAuth, updateProfile } from '@/features/auth'
 import {
-  listChallengePlayLogs,
+  listChallengeRecordings,
   getBestAccuracyPerSong,
   isChallengeSuccess,
 } from '@/features/challenge-history'
@@ -44,7 +44,7 @@ export default function AccountPage() {
   useEffect(() => {
     if (!user?.id) return
     setLoadingStats(true)
-    listChallengePlayLogs()
+    listChallengeRecordings()
       .then((res) => {
         if ('error' in res) return
         const rows = res.data

@@ -34,49 +34,141 @@ const TERMINAL_PLAY_EVENT_TYPES = new Set<PlayEventType>([
 ])
 
 /**
- * 上传 challenge session 的 MIDI 到 Storage。
+ * 上传 MIDI 文件，并写入一条 challenge_recordings 记录。
  *
- * 路径：userId/sessionId.mid
- *
- * 元数据（accuracy、song_source 等）由终止事件的 metadata 写入，
- * 再由 upsert_user_play_log 聚合进 user_play_logs。
+ * 要求：
+ * - 用户必须已经登录。
+ * - 用户身份只由服务端 auth.uid() 决定。
+ * - 不接受客户端传入的 userId，防止伪造其他用户身份。
  */
-export async function uploadChallengeSessionMidi(params: {
-  sessionId: string
+export async function saveChallengeRecording(params: {
+  songSource: string
+  songId: string
+  songTitle: string | null
+  durationSec: number
   midiBase64: string
-}): Promise<{ path: string } | { error: string }> {
+  accuracyPct?: number
+  difficulty?: number
+
+  /**
+   * 是否使用了 MIDI 键盘或其他 MIDI 输入设备。
+   */
+  midiKeyboardUsed?: boolean
+}): Promise<{ id: string } | { error: string }> {
   if (!supabase) {
+    console.error('[saveChallengeRecording] Supabase not configured')
     return { error: 'Supabase not configured' }
   }
 
+  /**
+   * 从 Supabase Auth 获取当前用户。
+   *
+   * 即使前端已经知道用户信息，这里仍然重新获取，
+   * 因为保存录音要求用户处于有效登录状态。
+   */
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
   if (!user) {
+    console.error('[saveChallengeRecording] Not authenticated')
     return { error: 'Not authenticated' }
   }
 
-  const path = `${user.id}/${params.sessionId}.mid`
+  const {
+    songSource,
+    songId,
+    songTitle,
+    durationSec,
+    midiBase64,
+    accuracyPct,
+    difficulty,
+    midiKeyboardUsed,
+  } = params
+
+  /**
+   * 每一条 challenge recording 使用独立 UUID。
+   */
+  const recordingId = crypto.randomUUID()
+
+  /**
+   * Storage 路径以用户 ID 分目录：
+   *
+   * userId/recordingId.mid
+   */
+  const path = `${user.id}/${recordingId}.mid`
+
+  /**
+   * 把 Base64 MIDI 转换成 Uint8Array，
+   * 供 Supabase Storage 上传。
+   */
   const binary = Uint8Array.from(
-    atob(params.midiBase64),
+    atob(midiBase64),
     (character) => character.charCodeAt(0),
   )
 
+  /**
+   * 第一步：把 MIDI 文件上传到 Storage。
+   */
   const { error: uploadError } = await supabase.storage
     .from(BUCKET)
     .upload(path, binary, {
       contentType: 'audio/midi',
-      upsert: true,
+
+      /**
+       * 不允许覆盖已有文件。
+       *
+       * recordingId 是随机 UUID，正常情况下不会重复。
+       */
+      upsert: false,
     })
 
   if (uploadError) {
+    console.error(
+      '[saveChallengeRecording] Storage upload failed:',
+      uploadError,
+    )
+
     return {
       error: `Storage: ${uploadError.message}`,
     }
   }
 
-  return { path }
+  /**
+   * 第二步：调用数据库 RPC，保存 challenge_recordings 记录。
+   *
+   * Storage 文件已经上传成功，
+   * 数据库中保存文件路径和挑战结果。
+   */
+  const { error: rpcError } = await supabase.rpc(
+    'save_challenge_recording',
+    {
+      recording_id: recordingId,
+      p_song_source: songSource,
+      p_song_id: songId,
+      p_song_title: songTitle,
+      p_duration_sec: durationSec,
+      p_midi_storage_path: path,
+      p_accuracy_pct: accuracyPct ?? 0,
+      p_difficulty: difficulty ?? 0,
+      p_midi_keyboard_used: midiKeyboardUsed ?? false,
+    },
+  )
+
+  if (rpcError) {
+    console.error(
+      '[saveChallengeRecording] RPC save_challenge_recording failed:',
+      rpcError,
+    )
+
+    return {
+      error: `DB: ${rpcError.message}`,
+    }
+  }
+
+  return {
+    id: recordingId,
+  }
 }
 
 export type LeaderboardSortBy =
@@ -127,9 +219,15 @@ export async function fetchLeaderboard(
 }
 
 /**
- * 获取当前登录用户的全部 challenge session（user_play_logs）。
+ * 获取当前登录用户的挑战录音列表。
+ *
+ * 数据按照 created_at 倒序排列。
+ *
+ * 这里不传 userId。
+ * 用户隔离完全依赖 Supabase RLS 和 auth.uid()，
+ * 防止客户端尝试读取其他用户的数据。
  */
-export async function listChallengePlayLogs(): Promise<
+export async function listChallengeRecordings(): Promise<
   | { data: ChallengeRecordingRow[] }
   | { error: string }
 > {
@@ -140,11 +238,8 @@ export async function listChallengePlayLogs(): Promise<
   }
 
   const { data, error } = await supabase
-    .from('user_play_logs')
-    .select(
-      'session_id,user_id,song_source,song_id,song_title,duration_sec,midi_storage_path,created_at,accuracy_pct,difficulty,midi_keyboard_used,song_time_sec,time_playing,exit_status',
-    )
-    .eq('play_mode', 'challenge')
+    .from('challenge_recordings')
+    .select('*')
     .order('created_at', {
       ascending: false,
     })
@@ -157,23 +252,6 @@ export async function listChallengePlayLogs(): Promise<
 
   return {
     data: (data ?? []) as ChallengeRecordingRow[],
-  }
-}
-
-/**
- * 获取当前登录用户、带 MIDI 文件的 challenge session。
- */
-export async function listChallengeRecordings(): Promise<
-  | { data: ChallengeRecordingRow[] }
-  | { error: string }
-> {
-  const result = await listChallengePlayLogs()
-  if ('error' in result) {
-    return result
-  }
-
-  return {
-    data: result.data.filter((row) => row.midi_storage_path),
   }
 }
 
@@ -270,12 +348,6 @@ export async function logPlayEvent(params: {
    * {
    *   song_duration_sec: number,
    *   time_playing_sec: number,
-   *   song_source: string,
-   *   song_title: string | null,
-   *   accuracy_pct: number,
-   *   difficulty: number,
-   *   midi_keyboard_used: boolean,
-   *   midi_storage_path: string | null,
    *   success: boolean
    * }
    *
@@ -472,10 +544,8 @@ export async function logPlayEvent(params: {
  * - ended_at
  * - events_count
  * - time_playing
- * - song_time_sec
  * - is_played_in_full
  * - exit_status
- * - midi_storage_path / accuracy_pct / midi_keyboard_used 等 challenge 字段
  *
  * 正常情况下，该函数由 logPlayEvent 在终止事件后自动调用。
  *
@@ -602,7 +672,6 @@ export function getBestAccuracyPerSong(
   >()
 
   for (const row of rows) {
-    if (!row.song_source) continue
     const key = `${row.song_source}/${row.song_id}`
     const accuracy = Number(row.accuracy_pct ?? 0)
     const existing = map.get(key)

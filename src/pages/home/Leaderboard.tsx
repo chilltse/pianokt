@@ -63,7 +63,7 @@ export function Leaderboard() {
       .channel('leaderboard-sync')
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'user_play_logs' },
+        { event: '*', schema: 'public', table: 'challenge_recordings' },
         () => refetch(),
       )
       .on(
