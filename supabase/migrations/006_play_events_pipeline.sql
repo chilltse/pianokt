@@ -129,8 +129,12 @@ declare
   v_days_since_signup numeric;
   v_user_created_at timestamptz;
 begin
+  v_user_id := auth.uid();
+  if v_user_id is null then
+    return;
+  end if;
+
   select
-    e.user_id,
     min(e.song_id),
     min(e.exercise_id),
     min(e.play_mode),
@@ -146,7 +150,6 @@ begin
       end
     )
   into
-    v_user_id,
     v_song_id,
     v_exercise_id,
     v_play_mode,
@@ -157,9 +160,9 @@ begin
     v_duration_target
   from public.play_events_raw e
   where e.session_id = p_session_id
-    and e.user_id = auth.uid();
+    and e.user_id = v_user_id;
 
-  if v_user_id is null then
+  if coalesce(v_events_count, 0) = 0 then
     return;
   end if;
 
@@ -167,7 +170,7 @@ begin
   into v_terminal_event, v_terminal_metadata
   from public.play_events_raw e
   where e.session_id = p_session_id
-    and e.user_id = auth.uid()
+    and e.user_id = v_user_id
     and e.event_type in ('finished', 'exited', 'failed')
   order by e.created_at desc
   limit 1;

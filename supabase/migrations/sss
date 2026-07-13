@@ -1,0 +1,2 @@
+select public.upsert_user_play_log('bd741a8a-33cc-459a-bfb5-d82913d8565d');
+select * from user_play_logs where session_id = 'bd741a8a-33cc-459a-bfb5-d82913d8565d';
