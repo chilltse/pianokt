@@ -122,6 +122,20 @@ begin
       v_challenge_recording_id := null;
   end;
 
+  -- Fallback for historical/partial events where metadata did not carry recording ID.
+  -- Pick the nearest challenge recording for the same user + song around this session window.
+  if v_challenge_recording_id is null and v_play_mode = 'challenge' then
+    select cr.id
+    into v_challenge_recording_id
+    from public.challenge_recordings cr
+    where cr.user_id = v_user_id
+      and cr.song_id = v_song_id
+      and cr.created_at between v_started_at - interval '30 minutes'
+                           and v_ended_at + interval '10 minutes'
+    order by abs(extract(epoch from (cr.created_at - v_ended_at))) asc
+    limit 1;
+  end if;
+
   v_is_played_in_full := coalesce(
     (v_terminal_event = 'finished'),
     false

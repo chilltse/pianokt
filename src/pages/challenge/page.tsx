@@ -93,6 +93,7 @@ export default function ChallengePage() {
   const playSessionIdRef = useRef<string | null>(null)
   const playStartedAtMsRef = useRef<number | null>(null)
   const accumulatedPlayMsRef = useRef(0)
+  const terminalFlowInFlightRef = useRef(false)
   const { currentTime, duration } = useSongScrubTimes()
 
   const range = useAtomValue(player.getRange())
@@ -222,14 +223,16 @@ export default function ChallengePage() {
     playSessionIdRef.current = null
     playStartedAtMsRef.current = null
     accumulatedPlayMsRef.current = 0
+    terminalFlowInFlightRef.current = false
   }
 
   const emitPlayEvent = async (
     eventType: PlayEventType,
     metadata: Record<string, unknown> = {},
     songTimeSecOverride?: number,
+    sessionIdOverride?: string,
   ): Promise<void> => {
-    const sessionId = playSessionIdRef.current
+    const sessionId = sessionIdOverride ?? playSessionIdRef.current
     if (!sessionId) return
 
     try {
@@ -310,10 +313,17 @@ export default function ChallengePage() {
   }
 
   const handleExitChallenge = async (reason: 'back_button' | 'confirm_exit') => {
+    if (terminalFlowInFlightRef.current) {
+      player.stop()
+      navigate('/')
+      return
+    }
+
     pausedByUserRef.current = true
     markPlayingStopped()
 
-    const hasSession = !!playSessionIdRef.current
+    const sessionId = playSessionIdRef.current
+    const hasSession = !!sessionId
     const terminalSongTime = nowSongSec()
     const dur = lastDurationRef.current || ((player as any).getDuration?.() ?? 0)
     const midiBytes = stopRecording(terminalSongTime, dur > 0 ? dur : undefined)
@@ -321,22 +331,27 @@ export default function ChallengePage() {
     const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
 
     if (hasSession) {
-      const recordingId = await saveChallengeRecordingFromBytes({
-        midiBytes,
-        durationSec: dur > 0 ? dur : 1,
-        accuracy,
-      })
-      await emitPlayEvent(
-        'exited',
-        {
-          reason,
-          accuracy_pct: accuracy,
-          challenge_recording_id: recordingId,
-          song_time_sec: terminalSongTime,
-        },
-        terminalSongTime,
-      )
-      resetPlaySessionTracking()
+      terminalFlowInFlightRef.current = true
+      try {
+        const recordingId = await saveChallengeRecordingFromBytes({
+          midiBytes,
+          durationSec: dur > 0 ? dur : 1,
+          accuracy,
+        })
+        await emitPlayEvent(
+          'exited',
+          {
+            reason,
+            accuracy_pct: accuracy,
+            challenge_recording_id: recordingId,
+            song_time_sec: terminalSongTime,
+          },
+          terminalSongTime,
+          sessionId ?? undefined,
+        )
+      } finally {
+        resetPlaySessionTracking()
+      }
     } else {
       resetPlaySessionTracking()
     }
@@ -354,6 +369,7 @@ export default function ChallengePage() {
       if (isNewSession) {
         playSessionIdRef.current = crypto.randomUUID()
         accumulatedPlayMsRef.current = 0
+        terminalFlowInFlightRef.current = false
       }
       markPlayingStarted()
       void emitPlayEvent(isNewSession ? 'play_started' : 'resumed')
@@ -435,23 +451,37 @@ export default function ChallengePage() {
       const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
       const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
       const succeeded = isChallengeSuccess(accuracy)
+      const sessionId = playSessionIdRef.current
 
       markPlayingStopped()
       setEndModalVariant(succeeded ? 'success' : 'complete')
       setShowSuccessModal(true)
+      if (!sessionId || terminalFlowInFlightRef.current) {
+        previousPlayingRef.current = isPlayingNow
+        return
+      }
+      terminalFlowInFlightRef.current = true
       void (async () => {
-        const recordingId = await saveChallengeRecordingFromBytes({
-          midiBytes,
-          durationSec: dur > 0 ? dur : 1,
-          accuracy,
-        })
-        await emitPlayEvent('finished', {
-          success: succeeded,
-          accuracy_pct: accuracy,
-          challenge_recording_id: recordingId,
-          song_time_sec: terminalSongTime,
-        }, terminalSongTime)
-        resetPlaySessionTracking()
+        try {
+          const recordingId = await saveChallengeRecordingFromBytes({
+            midiBytes,
+            durationSec: dur > 0 ? dur : 1,
+            accuracy,
+          })
+          await emitPlayEvent(
+            'finished',
+            {
+              success: succeeded,
+              accuracy_pct: accuracy,
+              challenge_recording_id: recordingId,
+              song_time_sec: terminalSongTime,
+            },
+            terminalSongTime,
+            sessionId,
+          )
+        } finally {
+          resetPlaySessionTracking()
+        }
       })()
     }
 
