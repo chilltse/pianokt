@@ -42,8 +42,13 @@ export function Leaderboard() {
 
   const refetch = () => {
     fetchLeaderboard(sortByRef.current).then((result) => {
-      if ('error' in result) setError(result.error)
-      else setData(result.data)
+      if ('error' in result) {
+        console.error('[Leaderboard] fetch failed:', result.error)
+        setError(result.error)
+      } else {
+        setError(null)
+        setData(result.data)
+      }
     })
   }
 
@@ -52,8 +57,13 @@ export function Leaderboard() {
     setError(null)
     fetchLeaderboard(sortBy).then((result) => {
       setLoading(false)
-      if ('error' in result) setError(result.error)
-      else setData(result.data)
+      if ('error' in result) {
+        console.error('[Leaderboard] fetch failed:', result.error)
+        setError(result.error)
+      } else {
+        setError(null)
+        setData(result.data)
+      }
     })
   }, [sortBy])
 
@@ -107,8 +117,9 @@ export function Leaderboard() {
               Loading…
             </div>
           ) : error ? (
-            <div className="py-12 text-center text-sm text-gray-500">
-              Leaderboard unavailable. Complete challenges to appear here.
+            <div className="space-y-2 py-12 text-center text-sm text-gray-500">
+              <div>Leaderboard temporarily unavailable.</div>
+              <div className="mx-auto max-w-md break-words text-xs text-gray-400">{error}</div>
             </div>
           ) : !data?.length ? (
             <div className="py-12 text-center text-sm text-gray-500">
