@@ -50,9 +50,11 @@ export default function SongPreviewModal({
     if (event.key === 'Enter') {
       event.preventDefault()
       if (isChallenge && challengePath) {
+        player.stop()
         navigate(challengePath)
         onClose()
       } else if (playSongSearch) {
+        player.stop()
         navigate({ pathname: '/play', search: `?${playSongSearch}` })
       }
     }
@@ -151,6 +153,7 @@ export default function SongPreviewModal({
             <Button
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-4 text-lg font-semibold text-white shadow-lg transition hover:bg-violet-500 active:bg-violet-700"
               onPress={() => {
+                player.stop()
                 if (isChallenge && challengePath) {
                   navigate(challengePath)
                   onClose()

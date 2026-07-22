@@ -287,6 +287,8 @@ export default function ChallengePage() {
       midiKeyboardUsed,
     })
 
+    console.log('[Challenge] saveChallengeRecording result:', result)
+
     if ('error' in result) {
       if (result.error !== 'Not authenticated') {
         console.error('[Challenge] Failed to save recording:', result.error)
@@ -445,21 +447,24 @@ export default function ChallengePage() {
         return
       }
 
+      // Ignore stop transitions that happen before the user starts a challenge session
+      // (e.g. preview still playing → challenge page setSong() stops player).
+      const sessionId = playSessionIdRef.current
+      if (!sessionId || terminalFlowInFlightRef.current) {
+        previousPlayingRef.current = isPlayingNow
+        return
+      }
+
       const dur = lastDurationRef.current || ((player as any).getDuration?.() ?? 0)
       const terminalSongTime = nowSongSec()
       const midiBytes = stopRecording(terminalSongTime, dur > 0 ? dur : undefined)
       const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
       const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
       const succeeded = isChallengeSuccess(accuracy)
-      const sessionId = playSessionIdRef.current
 
       markPlayingStopped()
       setEndModalVariant(succeeded ? 'success' : 'complete')
       setShowSuccessModal(true)
-      if (!sessionId || terminalFlowInFlightRef.current) {
-        previousPlayingRef.current = isPlayingNow
-        return
-      }
       terminalFlowInFlightRef.current = true
       void (async () => {
         try {
