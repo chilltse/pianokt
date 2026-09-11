@@ -129,7 +129,7 @@ resource "google_pubsub_subscription" "archive" {
     filename_prefix = "events/"
     filename_suffix = ".jsonl"
     max_duration    = "60s"
-    text_config {}
+    # Text output is the default when avro_config is omitted.
   }
   depends_on = [google_storage_bucket_iam_member.archive_create, google_storage_bucket_iam_member.archive_bucket]
 }

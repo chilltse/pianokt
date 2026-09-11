@@ -6,6 +6,8 @@ def run(raw,lake,checkpoint):
     from delta.tables import DeltaTable
     builder=(SparkSession.builder.appName('pianokt-events')
         .config('spark.sql.shuffle.partitions','2')
+        .config('spark.hadoop.fs.gs.impl','com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem')
+        .config('spark.hadoop.fs.AbstractFileSystem.gs.impl','com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS')
         .config('spark.sql.extensions','io.delta.sql.DeltaSparkSessionExtension')
         .config('spark.sql.catalog.spark_catalog','org.apache.spark.sql.delta.catalog.DeltaCatalog'))
     jars=os.getenv('PIANOKT_SPARK_JARS')

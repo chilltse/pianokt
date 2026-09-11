@@ -4,10 +4,10 @@
 
 ## 1. 最快看见真实 alignment 与 Delta 表
 
-在解压后的 `pianokt` 根目录执行。推荐 Python 3.11；后端支持 3.11–3.12，交付锁文件在 3.11 验证。
+在解压后的 `pianokt` 根目录执行。后端统一使用本地已测试的 Python 3.13.12；普通镜像和 Spark 镜像也固定为该版本。先确认 `python3.13 --version` 输出为 `Python 3.13.12`，再创建虚拟环境。已有虚拟环境若使用其他版本，需要用该解释器重新创建；修改 `.python-version` 不会改变已有虚拟环境的解释器。
 
 ```bash
-python3.11 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r backend/requirements.lock
 python -m pip install --no-deps -e backend
