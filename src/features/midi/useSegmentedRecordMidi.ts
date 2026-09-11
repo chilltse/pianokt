@@ -184,7 +184,9 @@ type MidiStateLike = {
  * ⚠️ 因为 hook 里拿不到 player，所以我提供了 flushSilenceTo(songTimeSec)
  *    由页面在播放时定时调用（100ms一次就够）来保证即使没按键也一直推进时间轴。
  */
-export function useSegmentedRecordMidi(midiState: MidiStateLike) {
+export function useSegmentedRecordMidi(midiState: MidiStateLike, getSongTime?: () => number) {
+  const eventClockRef = useRef(getSongTime)
+  eventClockRef.current = getSongTime
   const [isRecording, setIsRecording] = useState(false)
 
   const recorderRef = useRef<SimpleMidiRecorder | null>(null)
@@ -258,6 +260,8 @@ export function useSegmentedRecordMidi(midiState: MidiStateLike) {
     const handler = (e: MidiStateEvent) => {
       if (!recorderRef.current) return
       if (!isRecording) return
+      // Timestamp each MIDI event; the 100 ms UI timer only advances silence.
+      if (eventClockRef.current) advanceTo(eventClockRef.current())
 
       // 这里 deltaTicks 用 0，因为时间轴靠 advanceTo() 推进了。
       // 只要页面在播放中不断 flushSilenceTo(songTimeSec)，事件会落在正确的时间位置附近。

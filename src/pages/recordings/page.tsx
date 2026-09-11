@@ -1,4 +1,5 @@
 import { AppBar } from '@/components'
+import { Recommendations } from '@/features/challenge-history/Recommendations'
 import { useRequireAuth } from '@/features/auth'
 import {
   getChallengeRecordingDownloadUrl,
@@ -76,6 +77,7 @@ export default function RecordingsPage() {
       <div className="bg-paper bg-amber-50/70 min-h-screen">
         <div className="mx-auto max-w-2xl px-4 py-8">
         <h1 className="text-2xl font-semibold text-gray-900">My challenge recordings</h1>
+        <Recommendations />
         <p className="mt-1 text-sm text-gray-600">
           Recordings from Challenge mode are saved here when you’re logged in.
         </p>

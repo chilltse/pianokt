@@ -1,0 +1,9 @@
+project_id = "YOUR_PROJECT"
+region = "us-central1"
+image = "us-central1-docker.pkg.dev/YOUR_PROJECT/pianokt/backend:VERSION"
+spark_image = "us-central1-docker.pkg.dev/YOUR_PROJECT/pianokt/pipeline:VERSION"
+frontend_origin = "https://YOUR_FRONTEND"
+supabase_url = "https://YOUR_SUPABASE.supabase.co"
+supabase_anon_key = "PUBLIC_ANON_KEY"
+database_secret_id = "pianokt-database-url"
+schedules_paused = true

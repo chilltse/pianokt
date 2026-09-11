@@ -34,7 +34,7 @@ export function AvatarUploadZone({
     setUploading(true)
     const result = await uploadAvatar(file)
     setUploading(false)
-    if (result.error) {
+    if ('error' in result) {
       setError(result.error)
       return
     }

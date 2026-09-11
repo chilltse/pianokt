@@ -54,6 +54,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const timeoutId = setTimeout(setDone, AUTH_LOAD_TIMEOUT_MS)
 
     const checkWhitelistAndSignOutIfNeeded = async () => {
+      if (!supabase) return
       const { data, error: rpcErr } = await supabase.rpc('check_user_allowed')
       if (rpcErr) return
       if (data === false) {

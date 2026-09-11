@@ -1,4 +1,5 @@
 import Toast from '@/components/Toast'
+import { referenceSnapshot } from '@/features/challenge-history/referenceSnapshot'
 import {
   isChallengeSuccess,
   logPlayEvent,
@@ -175,7 +176,7 @@ export default function ChallengePage() {
     pauseRecording,
     stopRecording,
     flushSilenceTo,
-  } = useSegmentedRecordMidi(midiState)
+  } = useSegmentedRecordMidi(midiState, nowSongSec)
 
   function showToast(msg: string) {
     const newKey = Date.now().toString()
@@ -263,9 +264,10 @@ export default function ChallengePage() {
     midiBytes: Uint8Array | null
     durationSec: number
     accuracy: number
+    playedUntilSec: number
   }): Promise<string | null> => {
     const { midiBytes, durationSec, accuracy } = params
-    if (!midiBytes || midiBytes.length === 0) {
+    if (!song || !midiBytes || midiBytes.length === 0) {
       console.warn('[Challenge] No MIDI bytes to save recording.')
       return null
     }
@@ -282,6 +284,9 @@ export default function ChallengePage() {
       songTitle: songMeta?.title ?? null,
       durationSec: durationSec > 0 ? durationSec : 1,
       midiBase64: base64,
+      referenceMidiBase64: bytesToBase64(referenceSnapshot(song, songConfig, selectedRange)),
+      sessionId: playSessionIdRef.current ?? undefined,
+      practiceSettings: { range: selectedRange, waiting: songConfig.waiting, transpose: songConfig.transpose, time_basis: 'song_time', played_until_sec: params.playedUntilSec, left: songConfig.left, right: songConfig.right },
       accuracyPct: accuracy,
       difficulty,
       midiKeyboardUsed,
@@ -339,6 +344,7 @@ export default function ChallengePage() {
           midiBytes,
           durationSec: dur > 0 ? dur : 1,
           accuracy,
+          playedUntilSec: terminalSongTime,
         })
         await emitPlayEvent(
           'exited',
@@ -456,7 +462,7 @@ export default function ChallengePage() {
       }
 
       const dur = lastDurationRef.current || ((player as any).getDuration?.() ?? 0)
-      const terminalSongTime = nowSongSec()
+      const terminalSongTime = Math.max(nowSongSec(), lastSongTimeRef.current)
       const midiBytes = stopRecording(terminalSongTime, dur > 0 ? dur : undefined)
       const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
       const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
@@ -472,6 +478,7 @@ export default function ChallengePage() {
             midiBytes,
             durationSec: dur > 0 ? dur : 1,
             accuracy,
+            playedUntilSec: terminalSongTime,
           })
           await emitPlayEvent(
             'finished',
