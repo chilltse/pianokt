@@ -95,7 +95,18 @@ export default function ChallengePage() {
   const playStartedAtMsRef = useRef<number | null>(null)
   const accumulatedPlayMsRef = useRef(0)
   const terminalFlowInFlightRef = useRef(false)
+  // Mirrors terminalFlowInFlightRef for rendering; the ref is what guards synchronously.
+  const [isFinalizing, setIsFinalizing] = useState(false)
+  // The upload outlives this route, so toasts must not fire after unmount.
+  const isMountedRef = useRef(true)
   const { currentTime, duration } = useSongScrubTimes()
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
 
   const range = useAtomValue(player.getRange())
   const selectedRange = useMemo(
@@ -179,6 +190,10 @@ export default function ChallengePage() {
   } = useSegmentedRecordMidi(midiState, nowSongSec)
 
   function showToast(msg: string) {
+    if (!isMountedRef.current) {
+      console.info('[Challenge]', msg)
+      return
+    }
     const newKey = Date.now().toString()
     setToastMsg(msg)
     setToastKey(newKey)
@@ -196,8 +211,10 @@ export default function ChallengePage() {
   }
 
   const getSongDurationSec = () => {
-    const dur = (player as any).getDuration?.() ?? lastDurationRef.current ?? 0
-    return typeof dur === 'number' && Number.isFinite(dur) && dur > 0 ? dur : 0
+    const dur = (player as any).getDuration?.() ?? 0
+    if (typeof dur === 'number' && Number.isFinite(dur) && dur > 0) return dur
+    const fallback = lastDurationRef.current
+    return Number.isFinite(fallback) && fallback > 0 ? fallback : 0
   }
 
   const markPlayingStarted = () => {
@@ -220,11 +237,16 @@ export default function ChallengePage() {
     return Math.max(0, elapsedMs / 1000)
   }
 
+  const setTerminalFlowInFlight = (value: boolean) => {
+    terminalFlowInFlightRef.current = value
+    if (isMountedRef.current) setIsFinalizing(value)
+  }
+
   const resetPlaySessionTracking = () => {
     playSessionIdRef.current = null
     playStartedAtMsRef.current = null
     accumulatedPlayMsRef.current = 0
-    terminalFlowInFlightRef.current = false
+    setTerminalFlowInFlight(false)
   }
 
   const emitPlayEvent = async (
@@ -261,7 +283,10 @@ export default function ChallengePage() {
   }
 
   const saveChallengeRecordingFromBytes = async (params: {
+    sessionId: string
     midiBytes: Uint8Array | null
+    referenceMidiBase64: string
+    range: { start: number; end: number } | undefined
     durationSec: number
     accuracy: number
     playedUntilSec: number
@@ -284,9 +309,9 @@ export default function ChallengePage() {
       songTitle: songMeta?.title ?? null,
       durationSec: durationSec > 0 ? durationSec : 1,
       midiBase64: base64,
-      referenceMidiBase64: bytesToBase64(referenceSnapshot(song, songConfig, selectedRange)),
-      sessionId: playSessionIdRef.current ?? undefined,
-      practiceSettings: { range: selectedRange, waiting: songConfig.waiting, transpose: songConfig.transpose, time_basis: 'song_time', played_until_sec: params.playedUntilSec, left: songConfig.left, right: songConfig.right },
+      referenceMidiBase64: params.referenceMidiBase64,
+      sessionId: params.sessionId,
+      practiceSettings: { range: params.range, waiting: songConfig.waiting, transpose: songConfig.transpose, time_basis: 'song_time', played_until_sec: params.playedUntilSec, left: songConfig.left, right: songConfig.right },
       accuracyPct: accuracy,
       difficulty,
       midiKeyboardUsed,
@@ -319,57 +344,107 @@ export default function ChallengePage() {
     })
   }
 
-  const handleExitChallenge = async (reason: 'back_button' | 'confirm_exit') => {
-    if (terminalFlowInFlightRef.current) {
+  type TerminalContext = {
+    sessionId: string
+    midiBytes: Uint8Array
+    referenceMidiBase64: string
+    range: { start: number; end: number } | undefined
+    durationSec: number
+    accuracy: number
+    songTimeSec: number
+  }
+
+  /**
+   * Closes the current play session. Everything here is synchronous: playback is frozen,
+   * the recording is sealed and the session id is released before any await, so no later
+   * handler can resume into a session that already ended.
+   * Returns null when there is nothing to close, or when a terminal flow is already running.
+   */
+  const beginTerminal = (
+    songTimeSec: number,
+    { stopPlayback }: { stopPlayback: boolean },
+  ): TerminalContext | null => {
+    if (terminalFlowInFlightRef.current) return null
+    const sessionId = playSessionIdRef.current
+    if (!sessionId) return null
+
+    // player.stop() resets song time, stats and the selected range, so read them first.
+    const durationSec = lastDurationRef.current || ((player as any).getDuration?.() ?? 0)
+    const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
+    const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
+    const range = selectedRange
+    const referenceMidiBase64 = song
+      ? bytesToBase64(referenceSnapshot(song, songConfig, range))
+      : ''
+
+    setTerminalFlowInFlight(true)
+    playSessionIdRef.current = null
+    markPlayingStopped()
+    const midiBytes = stopRecording(songTimeSec, durationSec > 0 ? durationSec : undefined)
+    if (stopPlayback) {
+      // Flags the playing → stopped transition below as user-initiated. Only valid when we
+      // actually stop the transport; setting it otherwise would swallow the next natural finish.
+      pausedByUserRef.current = true
+      player.stop()
+    }
+
+    return { sessionId, midiBytes, referenceMidiBase64, range, durationSec, accuracy, songTimeSec }
+  }
+
+  /** Uploads the sealed recording and writes the terminal event. Runs detached from the UI. */
+  const finalizeSession = async (
+    eventType: Extract<PlayEventType, 'exited' | 'finished'>,
+    terminal: TerminalContext,
+    extraMetadata: Record<string, unknown>,
+  ) => {
+    try {
+      const recordingId = await saveChallengeRecordingFromBytes({
+        sessionId: terminal.sessionId,
+        midiBytes: terminal.midiBytes,
+        referenceMidiBase64: terminal.referenceMidiBase64,
+        range: terminal.range,
+        durationSec: terminal.durationSec > 0 ? terminal.durationSec : 1,
+        accuracy: terminal.accuracy,
+        playedUntilSec: terminal.songTimeSec,
+      })
+      await emitPlayEvent(
+        eventType,
+        {
+          ...extraMetadata,
+          accuracy_pct: terminal.accuracy,
+          challenge_recording_id: recordingId,
+          song_time_sec: terminal.songTimeSec,
+          // Captured before the transport was frozen; the live player may already be
+          // detached by the time this resolves.
+          ...(terminal.durationSec > 0 ? { song_duration_sec: terminal.durationSec } : {}),
+        },
+        terminal.songTimeSec,
+        terminal.sessionId,
+      )
+    } finally {
+      resetPlaySessionTracking()
+    }
+  }
+
+  const handleExitChallenge = (reason: 'back_button' | 'confirm_exit') => {
+    const terminal = beginTerminal(nowSongSec(), { stopPlayback: true })
+    if (!terminal) {
       player.stop()
       navigate('/')
       return
     }
 
-    pausedByUserRef.current = true
-    markPlayingStopped()
-
-    const sessionId = playSessionIdRef.current
-    const hasSession = !!sessionId
-    const terminalSongTime = nowSongSec()
-    const dur = lastDurationRef.current || ((player as any).getDuration?.() ?? 0)
-    const midiBytes = stopRecording(terminalSongTime, dur > 0 ? dur : undefined)
-    const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
-    const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
-
-    if (hasSession) {
-      terminalFlowInFlightRef.current = true
-      try {
-        const recordingId = await saveChallengeRecordingFromBytes({
-          midiBytes,
-          durationSec: dur > 0 ? dur : 1,
-          accuracy,
-          playedUntilSec: terminalSongTime,
-        })
-        await emitPlayEvent(
-          'exited',
-          {
-            reason,
-            accuracy_pct: accuracy,
-            challenge_recording_id: recordingId,
-            song_time_sec: terminalSongTime,
-          },
-          terminalSongTime,
-          sessionId ?? undefined,
-        )
-      } finally {
-        resetPlaySessionTracking()
-      }
-    } else {
-      resetPlaySessionTracking()
-    }
-
-    player.stop()
+    // Leave immediately; the upload keeps running in this JS context after the route changes.
     navigate('/')
+    void finalizeSession('exited', terminal, { reason })
   }
 
   // ✅ 你要的：只要在播放（playing=true）就录音，即使没弹键也要录
   const handleTogglePlayingChallenge = () => {
+    if (terminalFlowInFlightRef.current) {
+      showToast('Saving your recording…')
+      return
+    }
     const isPlayingNow = playerState.playing
 
     if (!isPlayingNow) {
@@ -377,7 +452,6 @@ export default function ChallengePage() {
       if (isNewSession) {
         playSessionIdRef.current = crypto.randomUUID()
         accumulatedPlayMsRef.current = 0
-        terminalFlowInFlightRef.current = false
       }
       markPlayingStarted()
       void emitPlayEvent(isNewSession ? 'play_started' : 'resumed')
@@ -398,6 +472,9 @@ export default function ChallengePage() {
   useEventListener<KeyboardEvent>('keydown', (evt: KeyboardEvent) => {
     if (evt.code !== 'Space') return
     evt.preventDefault()
+    // The listener is on window, so it still fires behind the end-of-challenge modal
+    // and while a terminal flow is finalizing. Neither may restart playback.
+    if (terminalFlowInFlightRef.current || showSuccessModal) return
     if (isConfirmExitOpen) {
       setIsConfirmExitOpen(false)
       if (!playSessionIdRef.current) {
@@ -455,46 +532,20 @@ export default function ChallengePage() {
 
       // Ignore stop transitions that happen before the user starts a challenge session
       // (e.g. preview still playing → challenge page setSong() stops player).
-      const sessionId = playSessionIdRef.current
-      if (!sessionId || terminalFlowInFlightRef.current) {
+      // playLoop_ already paused at the end of the song, so leave the transport alone:
+      // stopping here would wipe the song time and the selected range behind the modal.
+      const terminal = beginTerminal(Math.max(nowSongSec(), lastSongTimeRef.current), {
+        stopPlayback: false,
+      })
+      if (!terminal) {
         previousPlayingRef.current = isPlayingNow
         return
       }
 
-      const dur = lastDurationRef.current || ((player as any).getDuration?.() ?? 0)
-      const terminalSongTime = Math.max(nowSongSec(), lastSongTimeRef.current)
-      const midiBytes = stopRecording(terminalSongTime, dur > 0 ? dur : undefined)
-      const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
-      const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
-      const succeeded = isChallengeSuccess(accuracy)
-
-      markPlayingStopped()
+      const succeeded = isChallengeSuccess(terminal.accuracy)
       setEndModalVariant(succeeded ? 'success' : 'complete')
       setShowSuccessModal(true)
-      terminalFlowInFlightRef.current = true
-      void (async () => {
-        try {
-          const recordingId = await saveChallengeRecordingFromBytes({
-            midiBytes,
-            durationSec: dur > 0 ? dur : 1,
-            accuracy,
-            playedUntilSec: terminalSongTime,
-          })
-          await emitPlayEvent(
-            'finished',
-            {
-              success: succeeded,
-              accuracy_pct: accuracy,
-              challenge_recording_id: recordingId,
-              song_time_sec: terminalSongTime,
-            },
-            terminalSongTime,
-            sessionId,
-          )
-        } finally {
-          resetPlaySessionTracking()
-        }
-      })()
+      void finalizeSession('finished', terminal, { success: succeeded })
     }
 
     previousPlayingRef.current = isPlayingNow
@@ -576,10 +627,11 @@ export default function ChallengePage() {
         <div className="flex h-12 min-h-12 shrink-0 items-center justify-between border-t border-[#23242b] bg-[#141419] px-4 pb-[env(safe-area-inset-bottom)] text-gray-200">
           <div className="flex items-center gap-3">
             <button
-              className="flex h-9 px-4 items-center justify-center rounded-full bg-violet-600 text-white text-sm font-semibold"
+              className="flex h-9 px-4 items-center justify-center rounded-full bg-violet-600 text-white text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
               onClick={handleTogglePlayingChallenge}
+              disabled={isFinalizing}
             >
-              {playerState.playing ? 'Pause Challenge' : 'Start Challenge'}
+              {isFinalizing ? 'Saving…' : playerState.playing ? 'Pause Challenge' : 'Start Challenge'}
             </button>
           </div>
           <div className="flex items-center gap-4">
@@ -604,6 +656,7 @@ export default function ChallengePage() {
               <button
                 className="px-3 py-1.5 text-xs rounded border border-gray-500"
                 onClick={() => {
+                  if (terminalFlowInFlightRef.current) return
                   setIsConfirmExitOpen(false)
                   if (!playSessionIdRef.current) {
                     playSessionIdRef.current = crypto.randomUUID()
