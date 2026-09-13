@@ -262,7 +262,7 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler" {
 resource "google_cloud_scheduler_job" "job" {
   for_each  = google_cloud_run_v2_job.job
   name      = "pianokt-${each.key}"
-  schedule  = each.key == "relay" ? "0 2 * * *" : "0 3 * * *"
+  schedule  = each.key == "relay" ? "0 10,23 * * *" : "0 0,11 * * *"
   time_zone = "Asia/Tokyo"
   paused    = var.schedules_paused
   http_target {

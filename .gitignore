@@ -17,6 +17,9 @@ tsconfig.tsbuildinfo
 # Vercel CLI
 .vercel/
 
+# Local debug
+tests/local_debug/
+
 # Additional notes
 *_mynotes.*
 

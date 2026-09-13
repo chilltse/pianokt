@@ -1,5 +1,14 @@
 import { Midi } from '@tonejs/midi'
 import type { Song, SongConfig } from '@/types'
+
+// SongNote.velocity is kept as the MIDI wire value (0–127); @tonejs/midi
+// expects a normalized velocity (0–1). Passing the wire value through makes
+// its writer overflow the one-byte MIDI data field.
+function normalizedVelocity(velocity: number | undefined): number {
+  if (typeof velocity !== 'number' || !Number.isFinite(velocity)) return 0.8
+  return Math.min(1, Math.max(0, velocity / 127))
+}
+
 /** Immutable snapshot of the assigned hands, transposition and selected range. */
 export function referenceSnapshot(song: Song, config: SongConfig, range?: { start: number; end: number }): Uint8Array {
   const midi = new Midi(); midi.header.setTempo(120)
@@ -14,7 +23,7 @@ export function referenceSnapshot(song: Song, config: SongConfig, range?: { star
     if (!track) { track = midi.addTrack(); track.name = label; hands.set(label, track) }
     const pitch = note.midiNote + (config.transpose ?? 0)
     if (pitch < 0 || pitch > 127) throw new Error('Transposed pitch outside MIDI range')
-    track.addNote({ midi: pitch, time: note.time-start, duration: Math.min(note.duration,end-note.time), velocity: note.velocity ?? 0.8 })
+    track.addNote({ midi: pitch, time: note.time-start, duration: Math.min(note.duration,end-note.time), velocity: normalizedVelocity(note.velocity) })
   }
   return midi.toArray()
 }
