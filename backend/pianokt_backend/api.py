@@ -2,7 +2,7 @@
 import os
 import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import httpx
@@ -54,6 +54,60 @@ class Upload(BaseModel):
     session_id:uuid.UUID|None=None
     settings:dict=Field(default_factory=dict)
 
+class CycleEvent(BaseModel):
+    event_id:uuid.UUID
+    event_type:str=Field(pattern='^(play_started|paused|resumed|finished|exited)$')
+    song_time_sec:float=Field(ge=0,le=14400)
+    client_ts:datetime
+    metadata:dict=Field(default_factory=dict)
+
+class ChallengeCycle(BaseModel):
+    session_id:uuid.UUID
+    events:list[CycleEvent]=Field(min_length=2,max_length=1000)
+
+class Finalize(BaseModel):
+    cycle:ChallengeCycle
+
+def validate_cycle(row,cycle):
+    session_id=row['metadata'].get('session_id')
+    if not session_id or str(cycle.session_id)!=str(session_id):
+        raise HTTPException(409,'Session does not match attempt')
+    event_types=[event.event_type for event in cycle.events]
+    if event_types[0]!='play_started' or event_types[-1] not in ('finished','exited'):
+        raise HTTPException(422,'Cycle must start with play_started and end with finished or exited')
+    if any(event_type in ('play_started','finished','exited') for event_type in event_types[1:-1]):
+        raise HTTPException(422,'Cycle contains an invalid terminal or duplicate start event')
+    if len({event.event_id for event in cycle.events})!=len(cycle.events):
+        raise HTTPException(422,'Cycle event IDs must be unique')
+    timestamps=[]
+    for event in cycle.events:
+        timestamp=event.client_ts
+        if timestamp.tzinfo is None: timestamp=timestamp.replace(tzinfo=timezone.utc)
+        timestamps.append(timestamp)
+        if len(json.dumps(event.metadata))>16000: raise HTTPException(422,'Event metadata too large')
+    if timestamps!=sorted(timestamps): raise HTTPException(422,'Cycle events are not chronological')
+    return timestamps
+
+def commit_cycle(c,row,uid,cycle,timestamps):
+    """Write the user-visible challenge cycle inside the finalize transaction."""
+    for event in cycle.events:
+        c.execute('''insert into public.play_events_raw(event_id,session_id,user_id,song_id,exercise_id,play_mode,event_type,song_time_sec,client_ts,metadata)
+            values(%s,%s,%s,%s,%s,'challenge',%s,%s,%s,%s) on conflict(event_id) do nothing''',
+            (event.event_id,cycle.session_id,uid,row['song_id'],f"challenge:{row['song_id']}",event.event_type,event.song_time_sec,event.client_ts,Jsonb(event.metadata)))
+    terminal=cycle.events[-1]
+    terminal_metadata=terminal.metadata
+    duration=float(row['metadata']['duration_sec'])
+    time_playing=terminal_metadata.get('time_playing_sec',terminal.song_time_sec)
+    if not isinstance(time_playing,(int,float)) or not 0<=time_playing<=14400:
+        raise HTTPException(422,'Invalid terminal time_playing_sec')
+    success=terminal_metadata.get('success') is True
+    exit_status='abandoned' if terminal.event_type=='exited' else ('succeeded' if success else 'failed')
+    completed=terminal.event_type=='finished' or terminal.song_time_sec>=duration*.98
+    c.execute('''insert into public.user_play_logs(session_id,user_id,song_id,exercise_id,play_mode,days_since_signup,time_playing,song_time_sec,challenge_recording_id,is_played_in_full,exit_status,started_at,ended_at,events_count)
+        values(%s,%s,%s,%s,'challenge',null,%s,%s,%s,%s,%s,%s,%s,%s)
+        on conflict(session_id) do update set time_playing=excluded.time_playing,song_time_sec=excluded.song_time_sec,challenge_recording_id=excluded.challenge_recording_id,is_played_in_full=excluded.is_played_in_full,exit_status=excluded.exit_status,ended_at=excluded.ended_at,events_count=excluded.events_count,updated_at=now()''',
+        (cycle.session_id,uid,row['song_id'],f"challenge:{row['song_id']}",float(time_playing),terminal.song_time_sec,row['id'],completed,exit_status,timestamps[0],timestamps[-1],len(cycle.events)))
+
 @app.get('/health')
 def health(): return {'status':'ok'}
 
@@ -75,7 +129,7 @@ def create_attempt(body:Upload,uid=Depends(user)):
     return dict(attempt_id=str(body.attempt_id),performance_url=signed(row['performance_key'],'PUT'),reference_url=signed(row['reference_key'],'PUT'))
 
 @app.post('/attempts/{attempt_id}/finalize')
-def finalize(attempt_id:uuid.UUID,uid=Depends(user)):
+def finalize(attempt_id:uuid.UUID,body:Finalize,uid=Depends(user)):
     with connect() as c: row=owned_attempt(c,attempt_id,uid)
     if not row: raise HTTPException(404,'Attempt not found')
     store=objects()
@@ -90,6 +144,7 @@ def finalize(attempt_id:uuid.UUID,uid=Depends(user)):
             p=Path(tmp)/'input.mid'; p.write_bytes(data)
             try: check_midi(p)
             except ValueError as exc: raise HTTPException(422,str(exc)) from exc
+    timestamps=validate_cycle(row,body.cycle)
     with connect() as c:
         locked=c.execute('select * from public.piano_attempts where id=%s and user_id=%s for update',(attempt_id,uid)).fetchone()
         if locked['status']=='CREATED':
@@ -99,6 +154,7 @@ def finalize(attempt_id:uuid.UUID,uid=Depends(user)):
             meta=row['metadata']; settings=meta.get('settings',{})
             c.execute('''insert into public.challenge_recordings(id,user_id,song_source,song_id,song_title,duration_sec,midi_storage_path,midi_keyboard_used,accuracy_pct,difficulty)
                 values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict(id) do nothing''',(attempt_id,uid,row['song_source'],row['song_id'],row['song_title'],meta['duration_sec'],f'gcs:{attempt_id}',bool(settings.get('midi_keyboard_used',False)),settings.get('client_accuracy_pct') or 0,settings.get('client_difficulty') or 0))
+            commit_cycle(c,row,uid,body.cycle,timestamps)
     return {'id':str(attempt_id)}
 
 @app.get('/attempts/{attempt_id}')

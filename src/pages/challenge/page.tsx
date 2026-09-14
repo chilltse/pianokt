@@ -1,15 +1,11 @@
 import Toast from '@/components/Toast'
-import { referenceSnapshot } from '@/features/challenge-history/referenceSnapshot'
-import {
-  isChallengeSuccess,
-  logPlayEvent,
-  saveChallengeRecording,
-} from '@/features/challenge-history'
+import { isChallengeSuccess, saveChallengeRecording } from '@/features/challenge-history'
 import type { PlayEventType } from '@/features/challenge-history'
+import { referenceSnapshot } from '@/features/challenge-history/referenceSnapshot'
+import { useSongScrubTimes } from '@/features/controls'
 import { useSong } from '@/features/data'
 import { useSongMetadata } from '@/features/data/library'
 import midiState, { getMidiInputs, useSegmentedRecordMidi } from '@/features/midi'
-import { useSongScrubTimes } from '@/features/controls'
 import { usePlayer } from '@/features/player'
 import {
   getDefaultSongSettings,
@@ -26,6 +22,9 @@ import {
   useSongSettings,
   useWakeLock,
 } from '@/hooks'
+import { TopBar } from '@/pages/play/components'
+import CountdownOverlay from '@/pages/play/components/CountdownOverlay'
+import { StatsPopup } from '@/pages/play/components/StatsPopup'
 import { MidiStateEvent, SongSource } from '@/types'
 import { bytesToBase64 } from '@/utils'
 import * as RadixToast from '@radix-ui/react-toast'
@@ -34,15 +33,12 @@ import { useAtomValue } from 'jotai'
 import { AlertCircle, ArrowLeft } from 'lucide-react'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
-import { TopBar } from '@/pages/play/components'
-import CountdownOverlay from '@/pages/play/components/CountdownOverlay'
-import { StatsPopup } from '@/pages/play/components/StatsPopup'
 import ChallengeSuccessModal, { type ChallengeEndVariant } from './ChallengeSuccessModal'
 
 function SongNotFound({ songTitle, onGoBack }: { songTitle?: string; onGoBack: () => void }) {
   return (
-    <div className="flex h-screen items-center justify-center bg-paper bg-amber-50/70">
-      <div className="mx-auto max-w-md rounded-lg bg-white p-6 text-center shadow-lg border border-amber-100">
+    <div className="bg-paper flex h-screen items-center justify-center bg-amber-50/70">
+      <div className="mx-auto max-w-md rounded-lg border border-amber-100 bg-white p-6 text-center shadow-lg">
         <div className="mb-4">
           <AlertCircle className="mx-auto h-12 w-12 text-red-500" />
         </div>
@@ -67,8 +63,7 @@ function SongNotFound({ songTitle, onGoBack }: { songTitle?: string; onGoBack: (
 export default function ChallengePage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  let { source, id }: { source: SongSource; id: string } =
-    Object.fromEntries(searchParams) as any
+  let { source, id }: { source: SongSource; id: string } = Object.fromEntries(searchParams) as any
 
   if (!source || !id) {
     navigate('/', { replace: true })
@@ -92,6 +87,18 @@ export default function ChallengePage() {
   const [toastKey, setToastKey] = useState<string>('')
   const toastKeyRef = useRef(toastKey)
   const playSessionIdRef = useRef<string | null>(null)
+  const challengeEventsRef = useRef<
+    Array<{
+      eventId: string
+      eventType: Extract<
+        PlayEventType,
+        'play_started' | 'paused' | 'resumed' | 'finished' | 'exited'
+      >
+      songTimeSec: number
+      clientTs: string
+      metadata: Record<string, unknown>
+    }>
+  >([])
   const playStartedAtMsRef = useRef<number | null>(null)
   const accumulatedPlayMsRef = useRef(0)
   const terminalFlowInFlightRef = useRef(false)
@@ -136,14 +143,10 @@ export default function ChallengePage() {
     }
   }, [waiting, left, right, player])
 
-  const metronome =
-    songConfig.metronome ?? getDefaultSongSettings(song ?? undefined).metronome
+  const metronome = songConfig.metronome ?? getDefaultSongSettings(song ?? undefined).metronome
   const countdownEnabled =
-    songConfig.countdownEnabled ??
-    getDefaultSongSettings(song ?? undefined).countdownEnabled
-  const transpose =
-    songConfig.transpose ??
-    getDefaultSongSettings(song ?? undefined).transpose
+    songConfig.countdownEnabled ?? getDefaultSongSettings(song ?? undefined).countdownEnabled
+  const transpose = songConfig.transpose ?? getDefaultSongSettings(song ?? undefined).transpose
 
   useEffect(() => {
     if (!songConfig.metronome) {
@@ -244,42 +247,36 @@ export default function ChallengePage() {
 
   const resetPlaySessionTracking = () => {
     playSessionIdRef.current = null
+    challengeEventsRef.current = []
     playStartedAtMsRef.current = null
     accumulatedPlayMsRef.current = 0
     setTerminalFlowInFlight(false)
   }
 
-  const emitPlayEvent = async (
-    eventType: PlayEventType,
+  const recordChallengeEvent = (
+    eventType: Extract<
+      PlayEventType,
+      'play_started' | 'paused' | 'resumed' | 'finished' | 'exited'
+    >,
     metadata: Record<string, unknown> = {},
     songTimeSecOverride?: number,
     sessionIdOverride?: string,
-  ): Promise<void> => {
+  ): void => {
     const sessionId = sessionIdOverride ?? playSessionIdRef.current
     if (!sessionId) return
-
-    try {
-      const result = await logPlayEvent({
-        sessionId,
-        songId: id,
-        exerciseId: `challenge:${id}`,
-        playMode: 'challenge',
-        eventType,
-        songTimeSec: songTimeSecOverride ?? nowSongSec(),
-        metadata: {
-          source,
-          song_duration_sec: getSongDurationSec(),
-          time_playing_sec: Number(getTimePlayingSec().toFixed(3)),
-          difficulty: songMeta?.difficulty ?? null,
-          ...metadata,
-        },
-      })
-      if ('error' in result && result.error !== 'Not authenticated') {
-        console.warn(`[challenge-events] failed to log ${eventType}:`, result.error)
-      }
-    } catch (error) {
-      console.warn(`[challenge-events] failed to log ${eventType}:`, error)
-    }
+    challengeEventsRef.current.push({
+      eventId: crypto.randomUUID(),
+      eventType,
+      songTimeSec: songTimeSecOverride ?? nowSongSec(),
+      clientTs: new Date().toISOString(),
+      metadata: {
+        source,
+        song_duration_sec: getSongDurationSec(),
+        time_playing_sec: Number(getTimePlayingSec().toFixed(3)),
+        difficulty: songMeta?.difficulty ?? null,
+        ...metadata,
+      },
+    })
   }
 
   const saveChallengeRecordingFromBytes = async (params: {
@@ -290,6 +287,7 @@ export default function ChallengePage() {
     durationSec: number
     accuracy: number
     playedUntilSec: number
+    cycle: { sessionId: string; events: typeof challengeEventsRef.current }
   }): Promise<string | null> => {
     const { midiBytes, durationSec, accuracy } = params
     if (!song || !midiBytes || midiBytes.length === 0) {
@@ -311,10 +309,19 @@ export default function ChallengePage() {
       midiBase64: base64,
       referenceMidiBase64: params.referenceMidiBase64,
       sessionId: params.sessionId,
-      practiceSettings: { range: params.range, waiting: songConfig.waiting, transpose: songConfig.transpose, time_basis: 'song_time', played_until_sec: params.playedUntilSec, left: songConfig.left, right: songConfig.right },
+      practiceSettings: {
+        range: params.range,
+        waiting: songConfig.waiting,
+        transpose: songConfig.transpose,
+        time_basis: 'song_time',
+        played_until_sec: params.playedUntilSec,
+        left: songConfig.left,
+        right: songConfig.right,
+      },
       accuracyPct: accuracy,
       difficulty,
       midiKeyboardUsed,
+      cycle: params.cycle,
     })
 
     console.log('[Challenge] saveChallengeRecording result:', result)
@@ -391,12 +398,23 @@ export default function ChallengePage() {
     return { sessionId, midiBytes, referenceMidiBase64, range, durationSec, accuracy, songTimeSec }
   }
 
-  /** Uploads the sealed recording and writes the terminal event. Runs detached from the UI. */
+  /** Uploads the sealed recording and atomically commits the buffered cycle on the backend. */
   const finalizeSession = async (
     eventType: Extract<PlayEventType, 'exited' | 'finished'>,
     terminal: TerminalContext,
     extraMetadata: Record<string, unknown>,
-  ) => {
+  ): Promise<boolean> => {
+    recordChallengeEvent(
+      eventType,
+      {
+        ...extraMetadata,
+        accuracy_pct: terminal.accuracy,
+        song_time_sec: terminal.songTimeSec,
+        ...(terminal.durationSec > 0 ? { song_duration_sec: terminal.durationSec } : {}),
+      },
+      terminal.songTimeSec,
+      terminal.sessionId,
+    )
     try {
       const recordingId = await saveChallengeRecordingFromBytes({
         sessionId: terminal.sessionId,
@@ -406,21 +424,9 @@ export default function ChallengePage() {
         durationSec: terminal.durationSec > 0 ? terminal.durationSec : 1,
         accuracy: terminal.accuracy,
         playedUntilSec: terminal.songTimeSec,
+        cycle: { sessionId: terminal.sessionId, events: challengeEventsRef.current },
       })
-      await emitPlayEvent(
-        eventType,
-        {
-          ...extraMetadata,
-          accuracy_pct: terminal.accuracy,
-          challenge_recording_id: recordingId,
-          song_time_sec: terminal.songTimeSec,
-          // Captured before the transport was frozen; the live player may already be
-          // detached by the time this resolves.
-          ...(terminal.durationSec > 0 ? { song_duration_sec: terminal.durationSec } : {}),
-        },
-        terminal.songTimeSec,
-        terminal.sessionId,
-      )
+      return recordingId !== null
     } finally {
       resetPlaySessionTracking()
     }
@@ -434,9 +440,13 @@ export default function ChallengePage() {
       return
     }
 
-    // Leave immediately; the upload keeps running in this JS context after the route changes.
+    // Route changes keep this SPA's JavaScript context alive, so upload can proceed without
+    // blocking the exit interaction. If the browser is closed before finalize commits, the
+    // incomplete attempt remains invisible rather than becoming a partial challenge record.
     navigate('/')
-    void finalizeSession('exited', terminal, { reason })
+    void finalizeSession('exited', terminal, { reason }).catch((error) => {
+      console.error('[Challenge] Background save failed:', error)
+    })
   }
 
   // ✅ 你要的：只要在播放（playing=true）就录音，即使没弹键也要录
@@ -451,10 +461,11 @@ export default function ChallengePage() {
       const isNewSession = !playSessionIdRef.current
       if (isNewSession) {
         playSessionIdRef.current = crypto.randomUUID()
+        challengeEventsRef.current = []
         accumulatedPlayMsRef.current = 0
       }
       markPlayingStarted()
-      void emitPlayEvent(isNewSession ? 'play_started' : 'resumed')
+      recordChallengeEvent(isNewSession ? 'play_started' : 'resumed')
       // Start
       startOrResumeRecording(nowSongSec())
       player.play()
@@ -462,7 +473,7 @@ export default function ChallengePage() {
       // Pause: only pause recording and playback; show "Continue or Exit?" dialog (not the complete modal)
       pausedByUserRef.current = true
       markPlayingStopped()
-      void emitPlayEvent('paused')
+      recordChallengeEvent('paused')
       pauseRecording(nowSongSec())
       player.pause()
       setIsConfirmExitOpen(true)
@@ -479,10 +490,11 @@ export default function ChallengePage() {
       setIsConfirmExitOpen(false)
       if (!playSessionIdRef.current) {
         playSessionIdRef.current = crypto.randomUUID()
+        challengeEventsRef.current = []
         accumulatedPlayMsRef.current = 0
-        void emitPlayEvent('play_started')
+        recordChallengeEvent('play_started')
       } else {
-        void emitPlayEvent('resumed')
+        recordChallengeEvent('resumed')
       }
       markPlayingStarted()
       startOrResumeRecording(nowSongSec())
@@ -549,7 +561,15 @@ export default function ChallengePage() {
     }
 
     previousPlayingRef.current = isPlayingNow
-  }, [playerState.playing, player, stopRecording, source, id, songMeta?.title, songMeta?.difficulty])
+  }, [
+    playerState.playing,
+    player,
+    stopRecording,
+    source,
+    id,
+    songMeta?.title,
+    songMeta?.difficulty,
+  ])
 
   // 声音：按键就响
   useEffect(() => {
@@ -583,7 +603,9 @@ export default function ChallengePage() {
     <>
       <title>Challenge</title>
       <div
-        className={clsx('fixed inset-safe grid h-full w-full grid-rows-[auto_1fr_auto] outline-none min-h-0')}
+        className={clsx(
+          'inset-safe fixed grid h-full min-h-0 w-full grid-rows-[auto_1fr_auto] outline-none',
+        )}
         {...midiState.getListenerProps()}
         autoFocus
       >
@@ -627,11 +649,15 @@ export default function ChallengePage() {
         <div className="flex h-12 min-h-12 shrink-0 items-center justify-between border-t border-[#23242b] bg-[#141419] px-4 pb-[env(safe-area-inset-bottom)] text-gray-200">
           <div className="flex items-center gap-3">
             <button
-              className="flex h-9 px-4 items-center justify-center rounded-full bg-violet-600 text-white text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex h-9 items-center justify-center rounded-full bg-violet-600 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               onClick={handleTogglePlayingChallenge}
               disabled={isFinalizing}
             >
-              {isFinalizing ? 'Saving…' : playerState.playing ? 'Pause Challenge' : 'Start Challenge'}
+              {isFinalizing
+                ? 'Saving…'
+                : playerState.playing
+                  ? 'Pause Challenge'
+                  : 'Start Challenge'}
             </button>
           </div>
           <div className="flex items-center gap-4">
@@ -650,20 +676,21 @@ export default function ChallengePage() {
 
       {isConfirmExitOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50">
-          <div className="rounded-lg bg-[#1b1c23] p-6 w-80 text-sm text-white">
+          <div className="w-80 rounded-lg bg-[#1b1c23] p-6 text-sm text-white">
             <div className="mb-4 font-semibold">Exit challenge?</div>
             <div className="flex justify-end gap-3">
               <button
-                className="px-3 py-1.5 text-xs rounded border border-gray-500"
+                className="rounded border border-gray-500 px-3 py-1.5 text-xs"
                 onClick={() => {
                   if (terminalFlowInFlightRef.current) return
                   setIsConfirmExitOpen(false)
                   if (!playSessionIdRef.current) {
                     playSessionIdRef.current = crypto.randomUUID()
+                    challengeEventsRef.current = []
                     accumulatedPlayMsRef.current = 0
-                    void emitPlayEvent('play_started')
+                    recordChallengeEvent('play_started')
                   } else {
-                    void emitPlayEvent('resumed')
+                    recordChallengeEvent('resumed')
                   }
                   markPlayingStarted()
                   // ✅ Continue：resume 时同样要对齐歌曲时间（补齐静默）
@@ -674,7 +701,7 @@ export default function ChallengePage() {
                 Continue
               </button>
               <button
-                className="px-3 py-1.5 text-xs rounded bg-red-600"
+                className="rounded bg-red-600 px-3 py-1.5 text-xs"
                 onClick={() => {
                   setIsConfirmExitOpen(false)
                   void handleExitChallenge('confirm_exit')

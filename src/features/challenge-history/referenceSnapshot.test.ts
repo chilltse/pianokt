@@ -1,5 +1,5 @@
-import { Midi } from '@tonejs/midi'
 import type { Song, SongConfig } from '@/types'
+import { Midi } from '@tonejs/midi'
 import { referenceSnapshot } from './referenceSnapshot'
 
 describe('referenceSnapshot', () => {
@@ -19,6 +19,8 @@ describe('referenceSnapshot', () => {
 
     const exported = new Midi(referenceSnapshot(song, config))
     expect(exported.tracks).toHaveLength(1)
-    expect(exported.tracks[0].notes.map((note) => Math.round(note.velocity * 127))).toEqual([80, 96])
+    expect(exported.tracks[0].notes.map((note) => Math.round(note.velocity * 127))).toEqual([
+      80, 96,
+    ])
   })
 })
