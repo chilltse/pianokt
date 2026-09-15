@@ -290,6 +290,16 @@ export class Player {
   }
 
   getTime() {
+    return this.getTimeAt(performance.now())
+  }
+
+  /**
+   * Return transport time at a supplied monotonic browser timestamp.  MIDI
+   * devices expose event.timeStamp in the same high-resolution clock domain,
+   * so Challenge recording can use the key's timestamp instead of the time
+   * its JavaScript callback happened to run.
+   */
+  getTimeAt(monotonicTimeMs: number) {
     const offset = 0 // getAudioContext().outputLatency
     const song = this.getSong()
     if (!song) {
@@ -304,9 +314,14 @@ export class Player {
       return this.currentSongTime - offset
     }
 
-    const now = performance.now()
-    const dt = now - this.lastIntervalFiredTime
-    return Math.max(0, this.currentSongTime + dt / 1000 - offset)
+    // `currentSongTime` is the transport position at `lastIntervalFiredTime`.
+    // A Web MIDI callback may be dispatched after a newer player tick, so its
+    // original timestamp can legitimately be *before* that anchor. Keeping
+    // the signed delta reconstructs the key's position instead of turning JS
+    // queueing latency into a falsely late performance.
+    const dt = monotonicTimeMs - this.lastIntervalFiredTime
+    const rate = this.store.get(this.bpmModifier)
+    return Math.max(0, this.currentSongTime + (dt / 1000) * rate - offset)
   }
 
   getBpm() {

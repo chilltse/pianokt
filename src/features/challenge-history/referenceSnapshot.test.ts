@@ -23,4 +23,24 @@ describe('referenceSnapshot', () => {
       80, 96,
     ])
   })
+
+  it('exports a score window with a zero-based snapshot timeline', () => {
+    const song = {
+      duration: 3,
+      notes: [
+        { type: 'note', midiNote: 60, track: 0, time: 0, duration: 0.5, velocity: 80, measure: 1 },
+        { type: 'note', midiNote: 62, track: 0, time: 1, duration: 0.5, velocity: 80, measure: 1 },
+        { type: 'note', midiNote: 64, track: 0, time: 2, duration: 0.5, velocity: 80, measure: 1 },
+      ],
+    } as Song
+    const config = {
+      left: true,
+      right: true,
+      tracks: { 0: { hand: 'right' } },
+    } as unknown as SongConfig
+
+    const exported = new Midi(referenceSnapshot(song, config, { start: 1, end: 2.5 }))
+    expect(exported.tracks[0].notes.map((note) => note.midi)).toEqual([62, 64])
+    expect(exported.tracks[0].notes.map((note) => Number(note.time.toFixed(3)))).toEqual([0, 1])
+  })
 })

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MidiStateEvent } from '@/types'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 /**
  * 一个非常轻量、自包含的 MIDI Writer：
@@ -108,7 +108,7 @@ class SimpleMidiRecorder {
   noteOn(deltaTicks: number, note: number, velocity: number, channel = 0) {
     if (!this.started) return
     const n = clamp(note, 0, 127)
-    const v = clamp(Math.round(velocity * 127), 0, 127)
+    const v = clamp(Math.round(velocity), 0, 127)
     this.events.push({
       deltaTicks,
       bytes: [0x90 | (channel & 0x0f), n, v],
@@ -118,7 +118,7 @@ class SimpleMidiRecorder {
   noteOff(deltaTicks: number, note: number, velocity: number, channel = 0) {
     if (!this.started) return
     const n = clamp(note, 0, 127)
-    const v = clamp(Math.round(velocity * 127), 0, 127)
+    const v = clamp(Math.round(velocity), 0, 127)
     this.events.push({
       deltaTicks,
       bytes: [0x80 | (channel & 0x0f), n, v],
@@ -154,11 +154,7 @@ class SimpleMidiRecorder {
     ]
 
     // Track chunk: MTrk len=trackData.length
-    const track: number[] = [
-      ...strAscii('MTrk'),
-      ...u32be(trackData.length),
-      ...trackData,
-    ]
+    const track: number[] = [...strAscii('MTrk'), ...u32be(trackData.length), ...trackData]
 
     this.started = false
     return new Uint8Array([...header, ...track])
@@ -168,6 +164,67 @@ class SimpleMidiRecorder {
 type MidiStateLike = {
   subscribe: (fn: (e: MidiStateEvent) => void) => void
   unsubscribe: (fn: (e: MidiStateEvent) => void) => void
+}
+
+/** Immutable, raw browser evidence uploaded beside performance.mid. */
+export type PerformanceEventAudit = {
+  sequence: number
+  type: 'note_on' | 'note_off'
+  midiEventTimestamp: number
+  playerSongTime: number
+  performanceNowTimestamp: number
+  pitch: number
+  velocity: number
+  timestampSource: 'web_midi' | 'browser_keyboard'
+}
+
+/** Anchors that explain why player song time did or did not advance. */
+export type TransportSegmentAudit = {
+  sequence: number
+  type: 'start' | 'resume' | 'pause' | 'stop'
+  playerSongTime: number
+  performanceNowTimestamp: number
+}
+
+export type PerformanceEventsAudit = {
+  schemaVersion: 1
+  events: PerformanceEventAudit[]
+  transportSegments: TransportSegmentAudit[]
+}
+
+export type SegmentedRecording = {
+  midiBytes: Uint8Array
+  performanceEvents: PerformanceEventsAudit
+}
+
+type SongTimeClock = (monotonicTimestampMs?: number) => number
+
+function monotonicNow() {
+  return typeof performance === 'undefined' ? 0 : performance.now()
+}
+
+function nonNegativeFinite(value: unknown, fallback = 0) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback
+}
+
+function midiDataByte(value: unknown, fallback: number) {
+  return clamp(
+    Math.round(typeof value === 'number' && Number.isFinite(value) ? value : fallback),
+    0,
+    127,
+  )
+}
+
+function emptyPerformanceEvents(): PerformanceEventsAudit {
+  return { schemaVersion: 1, events: [], transportSegments: [] }
+}
+
+function clonePerformanceEvents(audit: PerformanceEventsAudit): PerformanceEventsAudit {
+  return {
+    schemaVersion: 1,
+    events: audit.events.map((event) => ({ ...event })),
+    transportSegments: audit.transportSegments.map((segment) => ({ ...segment })),
+  }
 }
 
 /**
@@ -184,17 +241,41 @@ type MidiStateLike = {
  * ⚠️ 因为 hook 里拿不到 player，所以我提供了 flushSilenceTo(songTimeSec)
  *    由页面在播放时定时调用（100ms一次就够）来保证即使没按键也一直推进时间轴。
  */
-export function useSegmentedRecordMidi(midiState: MidiStateLike, getSongTime?: () => number) {
+export function useSegmentedRecordMidi(midiState: MidiStateLike, getSongTime?: SongTimeClock) {
   const eventClockRef = useRef(getSongTime)
   eventClockRef.current = getSongTime
   const [isRecording, setIsRecording] = useState(false)
 
   const recorderRef = useRef<SimpleMidiRecorder | null>(null)
   const lastSongTimeSecRef = useRef<number | null>(null)
+  const isRecordingRef = useRef(false)
+  const performanceEventsRef = useRef<PerformanceEventsAudit | null>(null)
+
+  const recordTransportSegment = (
+    type: TransportSegmentAudit['type'],
+    songTimeSec: number,
+    performanceNowTimestamp = monotonicNow(),
+  ) => {
+    const audit = performanceEventsRef.current
+    if (!audit) return
+    audit.transportSegments.push({
+      sequence: audit.transportSegments.length,
+      type,
+      playerSongTime: nonNegativeFinite(songTimeSec),
+      performanceNowTimestamp: nonNegativeFinite(performanceNowTimestamp),
+    })
+  }
+
+  const recordPerformanceEvent = (event: Omit<PerformanceEventAudit, 'sequence'>) => {
+    const audit = performanceEventsRef.current
+    if (!audit) return
+    audit.events.push({ sequence: audit.events.length, ...event })
+  }
 
   // 页面传入 songTimeSec，这里补齐静默
   const advanceTo = (songTimeSec: number) => {
     if (!recorderRef.current) return
+    songTimeSec = nonNegativeFinite(songTimeSec)
     const last = lastSongTimeSecRef.current
     if (last == null) {
       lastSongTimeSecRef.current = songTimeSec
@@ -209,23 +290,37 @@ export function useSegmentedRecordMidi(midiState: MidiStateLike, getSongTime?: (
     lastSongTimeSecRef.current = songTimeSec
   }
 
-  const startOrResumeRecording = (songTimeSec: number) => {
+  const startOrResumeRecording = (songTimeSec: number, timelineOriginSongTimeSec = songTimeSec) => {
     if (!recorderRef.current) {
       recorderRef.current = new SimpleMidiRecorder(DEFAULT_BPM)
       recorderRef.current.start()
-      lastSongTimeSecRef.current = songTimeSec
+      // The performance MIDI is relative to the frozen reference snapshot,
+      // not to a delayed React callback after a countdown. Advance from that
+      // stable score origin to the moment recording actually becomes active.
+      lastSongTimeSecRef.current = nonNegativeFinite(timelineOriginSongTimeSec)
+      performanceEventsRef.current = emptyPerformanceEvents()
+      recordTransportSegment('start', songTimeSec)
+      advanceTo(songTimeSec)
+      isRecordingRef.current = true
       setIsRecording(true)
       return
     }
     // resume: 对齐时间（补静默到 resume 时刻）
     advanceTo(songTimeSec)
+    if (!isRecordingRef.current) {
+      recordTransportSegment('resume', songTimeSec)
+    }
+    isRecordingRef.current = true
     setIsRecording(true)
   }
 
   const pauseRecording = (songTimeSec: number) => {
     if (!recorderRef.current) return
+    if (!isRecordingRef.current) return
     // pause 时也要补齐静默到 pause 的时刻
     advanceTo(songTimeSec)
+    recordTransportSegment('pause', songTimeSec)
+    isRecordingRef.current = false
     setIsRecording(false)
   }
 
@@ -233,25 +328,36 @@ export function useSegmentedRecordMidi(midiState: MidiStateLike, getSongTime?: (
    * @param songTimeSec 当前歌曲时间（秒），用于补齐静默到此刻
    * @param targetDurationSec 可选：原曲总时长（秒）。若传入，会再补齐静默到该时长，使导出的 MIDI 和原曲时长一致
    */
-  const stopRecording = (songTimeSec: number, targetDurationSec?: number) => {
-    if (!recorderRef.current) return new Uint8Array()
+  const stopRecording = (songTimeSec: number, targetDurationSec?: number): SegmentedRecording => {
+    if (!recorderRef.current) {
+      return { midiBytes: new Uint8Array(), performanceEvents: emptyPerformanceEvents() }
+    }
     // stop 前补齐静默到当前时刻
     advanceTo(songTimeSec)
+    recordTransportSegment('stop', songTimeSec)
     // 若传入原曲总时长，再补齐到该时长，保证录音总长和原曲一致
-    if (typeof targetDurationSec === 'number' && targetDurationSec > (lastSongTimeSecRef.current ?? 0)) {
+    if (
+      typeof targetDurationSec === 'number' &&
+      targetDurationSec > (lastSongTimeSecRef.current ?? 0)
+    ) {
       advanceTo(targetDurationSec)
     }
     const bytes = recorderRef.current.finish()
+    const performanceEvents = clonePerformanceEvents(
+      performanceEventsRef.current ?? emptyPerformanceEvents(),
+    )
     recorderRef.current = null
     lastSongTimeSecRef.current = null
+    performanceEventsRef.current = null
+    isRecordingRef.current = false
     setIsRecording(false)
-    return bytes
+    return { midiBytes: bytes, performanceEvents }
   }
 
   // 播放中定时调用：保证“没按键也在录”
   const flushSilenceTo = (songTimeSec: number) => {
     if (!recorderRef.current) return
-    if (!isRecording) return
+    if (!isRecordingRef.current) return
     advanceTo(songTimeSec)
   }
 
@@ -259,25 +365,40 @@ export function useSegmentedRecordMidi(midiState: MidiStateLike, getSongTime?: (
   useEffect(() => {
     const handler = (e: MidiStateEvent) => {
       if (!recorderRef.current) return
-      if (!isRecording) return
-      // Timestamp each MIDI event; the 100 ms UI timer only advances silence.
-      if (eventClockRef.current) advanceTo(eventClockRef.current())
+      if (!isRecordingRef.current) return
+
+      // Preserve the Web MIDI timestamp. When the browser dispatches a physical
+      // MIDI event late because the main thread was busy, getSongTimeAt() can
+      // still reconstruct the transport position at the actual event timestamp.
+      const performanceNowTimestamp = nonNegativeFinite(e.performanceNowTimestamp, monotonicNow())
+      const midiEventTimestamp = nonNegativeFinite(e.midiEventTimestamp, performanceNowTimestamp)
+      const playerSongTime = nonNegativeFinite(eventClockRef.current?.(midiEventTimestamp))
+      advanceTo(playerSongTime)
 
       // 这里 deltaTicks 用 0，因为时间轴靠 advanceTo() 推进了。
       // 只要页面在播放中不断 flushSilenceTo(songTimeSec)，事件会落在正确的时间位置附近。
-      const note = (e as any).note ?? 60
-      const vel = (e as any).velocity ?? 0.8
+      const note = midiDataByte(e.note, 60)
+      const velocity = midiDataByte(e.velocity, e.type === 'down' ? 102 : 0)
 
       if (e.type === 'down') {
-        recorderRef.current.noteOn(0, note, vel)
+        recorderRef.current.noteOn(0, note, velocity)
       } else {
-        recorderRef.current.noteOff(0, note, vel)
+        recorderRef.current.noteOff(0, note, velocity)
       }
+      recordPerformanceEvent({
+        type: e.type === 'down' ? 'note_on' : 'note_off',
+        midiEventTimestamp,
+        playerSongTime,
+        performanceNowTimestamp,
+        pitch: note,
+        velocity,
+        timestampSource: e.timestampSource ?? 'browser_keyboard',
+      })
     }
 
     midiState.subscribe(handler)
     return () => midiState.unsubscribe(handler)
-  }, [midiState, isRecording])
+  }, [midiState])
 
   return useMemo(
     () => ({

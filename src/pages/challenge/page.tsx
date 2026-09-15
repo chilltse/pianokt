@@ -5,7 +5,11 @@ import { referenceSnapshot } from '@/features/challenge-history/referenceSnapsho
 import { useSongScrubTimes } from '@/features/controls'
 import { useSong } from '@/features/data'
 import { useSongMetadata } from '@/features/data/library'
-import midiState, { getMidiInputs, useSegmentedRecordMidi } from '@/features/midi'
+import midiState, {
+  getMidiInputs,
+  useSegmentedRecordMidi,
+  type PerformanceEventsAudit,
+} from '@/features/midi'
 import { usePlayer } from '@/features/player'
 import {
   getDefaultSongSettings,
@@ -25,7 +29,7 @@ import {
 import { TopBar } from '@/pages/play/components'
 import CountdownOverlay from '@/pages/play/components/CountdownOverlay'
 import { StatsPopup } from '@/pages/play/components/StatsPopup'
-import { MidiStateEvent, SongSource } from '@/types'
+import { MidiStateEvent, SongConfig, SongSource } from '@/types'
 import { bytesToBase64 } from '@/utils'
 import * as RadixToast from '@radix-ui/react-toast'
 import clsx from 'clsx'
@@ -87,6 +91,22 @@ export default function ChallengePage() {
   const [toastKey, setToastKey] = useState<string>('')
   const toastKeyRef = useRef(toastKey)
   const playSessionIdRef = useRef<string | null>(null)
+  // Frozen when a Challenge transport is armed. Countdown consumes wall time
+  // but not song time, so this preserves the exact score origin that playback
+  // will use once it actually begins.
+  const challengeAssignmentRef = useRef<{
+    range: { start: number; end: number }
+    config: SongConfig
+  } | null>(null)
+  const pendingTransportEventRef = useRef<Extract<
+    PlayEventType,
+    'play_started' | 'resumed'
+  > | null>(null)
+  // Assignment is armed before a count-in, whereas a valid challenge cycle
+  // only starts when the score transport actually starts. Keep those states
+  // distinct so a rapid count-in cancel/pause cannot manufacture a cycle that
+  // begins with `paused` or `resumed`.
+  const recordedTransportStartedRef = useRef(false)
   const challengeEventsRef = useRef<
     Array<{
       eventId: string
@@ -174,9 +194,16 @@ export default function ChallengePage() {
   // =========================
   // ✅ 录音：歌曲时间基准
   // =========================
-  const nowSongSec = () => {
+  const nowSongSec = (monotonicTimestampMs?: number) => {
     // 你项目里 player.getTime() / player.currentSongTime 可能是秒
-    // 我这里优先用 getTime()，没有的话再读 currentSongTime
+    // MIDI event handler 传入原始事件的 monotonic timestamp 时，优先让 player
+    // reconstruct that instant's song time instead of using the delayed JS callback time.
+    const timestamp =
+      monotonicTimestampMs ?? (typeof performance === 'undefined' ? undefined : performance.now())
+    const at = (player as any).getTimeAt?.(timestamp)
+    if (typeof at === 'number' && Number.isFinite(at)) return at
+
+    // 旧 player 实现没有 getTimeAt() 时，保留既有回退路径。
     const t = (player as any).getTime?.()
     if (typeof t === 'number' && Number.isFinite(t)) return t
     const ct = (player as any).currentSongTime
@@ -248,6 +275,9 @@ export default function ChallengePage() {
   const resetPlaySessionTracking = () => {
     playSessionIdRef.current = null
     challengeEventsRef.current = []
+    challengeAssignmentRef.current = null
+    pendingTransportEventRef.current = null
+    recordedTransportStartedRef.current = false
     playStartedAtMsRef.current = null
     accumulatedPlayMsRef.current = 0
     setTerminalFlowInFlight(false)
@@ -279,11 +309,73 @@ export default function ChallengePage() {
     })
   }
 
+  const freezeChallengeAssignment = () => {
+    if (challengeAssignmentRef.current) return challengeAssignmentRef.current
+    const requestedSongTime = nowSongSec()
+    const durationSec = getSongDurationSec() || song?.duration || requestedSongTime
+    const configuredEnd = selectedRange?.end ?? durationSec
+    // Player restarts a natural end from zero in startPlayback_(). Mirror that
+    // planned score position instead of freezing the terminal duration.
+    const start =
+      durationSec > 0 && requestedSongTime >= durationSec
+        ? (selectedRange?.start ?? 0)
+        : Math.max(0, Math.min(requestedSongTime, configuredEnd))
+    const assignment = {
+      range: { start, end: Math.max(start, configuredEnd) },
+      config: JSON.parse(JSON.stringify(songConfig)) as SongConfig,
+    }
+    challengeAssignmentRef.current = assignment
+    return assignment
+  }
+
+  const beginRecordedTransport = (
+    eventType: Extract<PlayEventType, 'play_started' | 'resumed'>,
+  ) => {
+    if (terminalFlowInFlightRef.current || !playSessionIdRef.current) return
+    const songTimeSec = nowSongSec()
+    if (eventType === 'play_started') {
+      freezeChallengeAssignment()
+    }
+    markPlayingStarted()
+    recordChallengeEvent(eventType, {}, songTimeSec)
+    startOrResumeRecording(songTimeSec, challengeAssignmentRef.current?.range.start)
+    recordedTransportStartedRef.current = true
+  }
+
+  const requestChallengeTransport = (
+    eventType: Extract<PlayEventType, 'play_started' | 'resumed'>,
+  ) => {
+    if (eventType === 'play_started') freezeChallengeAssignment()
+    pendingTransportEventRef.current = eventType
+    player.play()
+    // With no countdown `play()` transitions synchronously. During countdown
+    // this remains pending until the effect below observes actual playback.
+    if (player.isPlaying()) {
+      pendingTransportEventRef.current = null
+      beginRecordedTransport(eventType)
+    }
+  }
+
+  useEffect(() => {
+    // `usePlayerState().playing` intentionally includes CountingDown for the
+    // ordinary player UI. Challenge evidence must begin only after the score
+    // transport itself starts, otherwise count-in key presses become part of
+    // the recorded take.
+    if (playerState.countingDown || !playerState.playing || !pendingTransportEventRef.current)
+      return
+    const eventType = pendingTransportEventRef.current
+    pendingTransportEventRef.current = null
+    beginRecordedTransport(eventType)
+  }, [playerState.playing, playerState.countingDown, startOrResumeRecording])
+
   const saveChallengeRecordingFromBytes = async (params: {
     sessionId: string
     midiBytes: Uint8Array | null
+    performanceEvents: PerformanceEventsAudit
     referenceMidiBase64: string
-    range: { start: number; end: number } | undefined
+    referenceConfig: SongConfig
+    observedRange: { start: number; end: number }
+    assignedRange: { start: number; end: number }
     durationSec: number
     accuracy: number
     playedUntilSec: number
@@ -308,15 +400,22 @@ export default function ChallengePage() {
       durationSec: durationSec > 0 ? durationSec : 1,
       midiBase64: base64,
       referenceMidiBase64: params.referenceMidiBase64,
+      performanceEvents: params.performanceEvents,
       sessionId: params.sessionId,
       practiceSettings: {
-        range: params.range,
-        waiting: songConfig.waiting,
-        transpose: songConfig.transpose,
+        // `range` remains the compatibility field consumed by existing workers.
+        // Both range fields make it explicit that reference.mid is only the part
+        // actually observed before exit/finish.
+        range: params.observedRange,
+        assigned_range: params.assignedRange,
+        observed_range: params.observedRange,
+        reference_time_origin_sec: params.observedRange.start,
+        waiting: params.referenceConfig.waiting,
+        transpose: params.referenceConfig.transpose,
         time_basis: 'song_time',
         played_until_sec: params.playedUntilSec,
-        left: songConfig.left,
-        right: songConfig.right,
+        left: params.referenceConfig.left,
+        right: params.referenceConfig.right,
       },
       accuracyPct: accuracy,
       difficulty,
@@ -354,8 +453,11 @@ export default function ChallengePage() {
   type TerminalContext = {
     sessionId: string
     midiBytes: Uint8Array
+    performanceEvents: PerformanceEventsAudit
     referenceMidiBase64: string
-    range: { start: number; end: number } | undefined
+    referenceConfig: SongConfig
+    observedRange: { start: number; end: number }
+    assignedRange: { start: number; end: number }
     durationSec: number
     accuracy: number
     songTimeSec: number
@@ -379,15 +481,38 @@ export default function ChallengePage() {
     const durationSec = lastDurationRef.current || ((player as any).getDuration?.() ?? 0)
     const accuracyPct = (player as any).store?.get?.((player as any).score?.accuracy) ?? 0
     const accuracy = typeof accuracyPct === 'number' ? accuracyPct : 0
-    const range = selectedRange
+    const fallbackStart = Math.max(0, songTimeSec)
+    const fallbackEnd = Math.max(
+      fallbackStart,
+      selectedRange?.end ?? (durationSec > 0 ? durationSec : (song?.duration ?? 0)),
+    )
+    const assignment =
+      challengeAssignmentRef.current ??
+      ({
+        range: { start: fallbackStart, end: fallbackEnd },
+        // This fallback only occurs if the user exits during countdown before
+        // recording begins. It is never sent unless a valid MIDI take exists.
+        config: JSON.parse(JSON.stringify(songConfig)) as SongConfig,
+      } satisfies { range: { start: number; end: number }; config: SongConfig })
+    const assignedRange = assignment.range
+    // Store reference.mid as precisely the score window this attempt observed.
+    // It prevents a short, abandoned performance from being matched against a
+    // later repeated phrase in the full song.
+    const observedRange = {
+      start: assignedRange.start,
+      end: Math.min(Math.max(songTimeSec, assignedRange.start), assignedRange.end),
+    }
     const referenceMidiBase64 = song
-      ? bytesToBase64(referenceSnapshot(song, songConfig, range))
+      ? bytesToBase64(referenceSnapshot(song, assignment.config, observedRange))
       : ''
 
     setTerminalFlowInFlight(true)
+    pendingTransportEventRef.current = null
     playSessionIdRef.current = null
     markPlayingStopped()
-    const midiBytes = stopRecording(songTimeSec, durationSec > 0 ? durationSec : undefined)
+    // Do not pad an abandoned performance to the original song duration. Its
+    // MIDI and reference snapshot deliberately end at the same observed window.
+    const recording = stopRecording(songTimeSec)
     if (stopPlayback) {
       // Flags the playing → stopped transition below as user-initiated. Only valid when we
       // actually stop the transport; setting it otherwise would swallow the next natural finish.
@@ -395,7 +520,18 @@ export default function ChallengePage() {
       player.stop()
     }
 
-    return { sessionId, midiBytes, referenceMidiBase64, range, durationSec, accuracy, songTimeSec }
+    return {
+      sessionId,
+      midiBytes: recording.midiBytes,
+      performanceEvents: recording.performanceEvents,
+      referenceMidiBase64,
+      referenceConfig: assignment.config,
+      observedRange,
+      assignedRange,
+      durationSec,
+      accuracy,
+      songTimeSec,
+    }
   }
 
   /** Uploads the sealed recording and atomically commits the buffered cycle on the backend. */
@@ -419,8 +555,11 @@ export default function ChallengePage() {
       const recordingId = await saveChallengeRecordingFromBytes({
         sessionId: terminal.sessionId,
         midiBytes: terminal.midiBytes,
+        performanceEvents: terminal.performanceEvents,
         referenceMidiBase64: terminal.referenceMidiBase64,
-        range: terminal.range,
+        referenceConfig: terminal.referenceConfig,
+        observedRange: terminal.observedRange,
+        assignedRange: terminal.assignedRange,
         durationSec: terminal.durationSec > 0 ? terminal.durationSec : 1,
         accuracy: terminal.accuracy,
         playedUntilSec: terminal.songTimeSec,
@@ -455,6 +594,18 @@ export default function ChallengePage() {
       showToast('Saving your recording…')
       return
     }
+
+    // A count-in is not part of a challenge take. Cancelling it must not
+    // create a `paused`/`resumed` cycle without `play_started`, because that
+    // would later fail the atomic finalize validation despite no recording
+    // ever having begun.
+    if (playerState.countingDown) {
+      pendingTransportEventRef.current = null
+      player.cancelCountdown()
+      resetPlaySessionTracking()
+      return
+    }
+
     const isPlayingNow = playerState.playing
 
     if (!isPlayingNow) {
@@ -462,19 +613,27 @@ export default function ChallengePage() {
       if (isNewSession) {
         playSessionIdRef.current = crypto.randomUUID()
         challengeEventsRef.current = []
+        challengeAssignmentRef.current = null
+        recordedTransportStartedRef.current = false
         accumulatedPlayMsRef.current = 0
       }
-      markPlayingStarted()
-      recordChallengeEvent(isNewSession ? 'play_started' : 'resumed')
-      // Start
-      startOrResumeRecording(nowSongSec())
-      player.play()
+      requestChallengeTransport(isNewSession ? 'play_started' : 'resumed')
     } else {
       // Pause: only pause recording and playback; show "Continue or Exit?" dialog (not the complete modal)
       pausedByUserRef.current = true
-      markPlayingStopped()
-      recordChallengeEvent('paused')
-      pauseRecording(nowSongSec())
+      pendingTransportEventRef.current = null
+      if (recordedTransportStartedRef.current) {
+        markPlayingStopped()
+        recordChallengeEvent('paused')
+        pauseRecording(nowSongSec())
+      } else {
+        // The player may have transitioned out of the count-in just before
+        // React's effect recorded `play_started`. There is still no valid
+        // take, so cancel it rather than emitting a malformed cycle.
+        player.pause()
+        resetPlaySessionTracking()
+        return
+      }
       player.pause()
       setIsConfirmExitOpen(true)
     }
@@ -492,13 +651,10 @@ export default function ChallengePage() {
         playSessionIdRef.current = crypto.randomUUID()
         challengeEventsRef.current = []
         accumulatedPlayMsRef.current = 0
-        recordChallengeEvent('play_started')
-      } else {
-        recordChallengeEvent('resumed')
+        challengeAssignmentRef.current = null
+        recordedTransportStartedRef.current = false
       }
-      markPlayingStarted()
-      startOrResumeRecording(nowSongSec())
-      player.play()
+      requestChallengeTransport(recordedTransportStartedRef.current ? 'resumed' : 'play_started')
       return
     }
     handleTogglePlayingChallenge()
@@ -512,7 +668,7 @@ export default function ChallengePage() {
 
   // ✅ 播放期间每 100ms 推进静默时间并更新 ref，供“播完”判断用
   useEffect(() => {
-    if (!playerState.playing || !isRecordingMidi) return
+    if (playerState.countingDown || !playerState.playing || !isRecordingMidi) return
     const timer = window.setInterval(() => {
       const t = nowSongSec()
       const dur = (player as any).getDuration?.() ?? 0
@@ -521,7 +677,7 @@ export default function ChallengePage() {
       flushSilenceTo(t)
     }, 100)
     return () => window.clearInterval(timer)
-  }, [playerState.playing, isRecordingMidi])
+  }, [playerState.playing, playerState.countingDown, isRecordingMidi])
 
   // ✅ 播放结束：用 ref 判断是否播到结尾（不依赖 player 当前值），再导出并上传
   const previousPlayingRef = useRef(playerState.playing)
@@ -688,14 +844,12 @@ export default function ChallengePage() {
                     playSessionIdRef.current = crypto.randomUUID()
                     challengeEventsRef.current = []
                     accumulatedPlayMsRef.current = 0
-                    recordChallengeEvent('play_started')
-                  } else {
-                    recordChallengeEvent('resumed')
+                    challengeAssignmentRef.current = null
+                    recordedTransportStartedRef.current = false
                   }
-                  markPlayingStarted()
-                  // ✅ Continue：resume 时同样要对齐歌曲时间（补齐静默）
-                  startOrResumeRecording(nowSongSec())
-                  player.play()
+                  requestChallengeTransport(
+                    recordedTransportStartedRef.current ? 'resumed' : 'play_started',
+                  )
                 }}
               >
                 Continue

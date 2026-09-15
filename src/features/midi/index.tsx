@@ -119,6 +119,50 @@ export type MidiEvent = {
   timeStamp: number
 }
 
+type MidiEventTiming = Pick<
+  MidiStateEvent,
+  'midiEventTimestamp' | 'performanceNowTimestamp' | 'timestampSource'
+>
+
+function performanceNow() {
+  return typeof performance === 'undefined' ? 0 : performance.now()
+}
+
+function inputTiming(
+  eventTimestamp: number | undefined,
+  source: MidiStateEvent['timestampSource'],
+): MidiEventTiming {
+  const now = performanceNow()
+  let midiEventTimestamp = now
+  if (
+    typeof eventTimestamp === 'number' &&
+    Number.isFinite(eventTimestamp) &&
+    eventTimestamp >= 0
+  ) {
+    midiEventTimestamp = eventTimestamp
+
+    // Modern DOM timestamps share performance.now()'s time origin. Older Safari
+    // versions have occasionally exposed epoch-style timestamps instead; convert
+    // those when possible so Player.getTimeAt() receives a monotonic timestamp.
+    if (Math.abs(midiEventTimestamp - now) > 60 * 60 * 1000) {
+      const timeOrigin =
+        typeof performance !== 'undefined' && Number.isFinite(performance.timeOrigin)
+          ? performance.timeOrigin
+          : undefined
+      const converted = timeOrigin === undefined ? Number.NaN : midiEventTimestamp - timeOrigin
+      midiEventTimestamp =
+        Number.isFinite(converted) && converted >= 0 && Math.abs(converted - now) <= 60 * 60 * 1000
+          ? converted
+          : now
+    }
+  }
+  return {
+    midiEventTimestamp,
+    performanceNowTimestamp: now,
+    timestampSource: source,
+  }
+}
+
 function parseMidiMessage(event: MIDIMessageEvent): MidiEvent | null {
   const data = event.data!
   if (data.length !== 3) {
@@ -206,7 +250,7 @@ class MidiState {
       const computedNote = getNote(note + computedOctave)
       if (computedNote) {
         this.keyPressedNotes.add(computedNote)
-        this.press(computedNote, 80)
+        this.press(computedNote, 80, inputTiming(e.timeStamp, 'browser_keyboard'))
       }
     }
   }
@@ -218,7 +262,7 @@ class MidiState {
       const computedOctave = octave + this.octaveDiff
       const computedNote = getNote(note + computedOctave)
       this.keyPressedNotes.delete(computedNote)
-      this.release(computedNote)
+      this.release(computedNote, 0, inputTiming(e.timeStamp, 'browser_keyboard'))
     }
   }
 
@@ -238,10 +282,16 @@ class MidiState {
     return this.pressedNotes
   }
 
-  press(note: number, velocity: number) {
+  press(note: number, velocity: number, timing?: MidiEventTiming) {
     const time = Date.now()
     this.pressedNotes.set(note, { time, vel: velocity })
-    this.notify({ note, velocity, type: 'down', time })
+    this.notify({
+      note,
+      velocity,
+      type: 'down',
+      time,
+      ...timing,
+    })
   }
   pressOutput(note: number, volume: number) {
     for (const output of enabledOutputDevices) {
@@ -252,9 +302,15 @@ class MidiState {
     }
   }
 
-  release(note: number) {
+  release(note: number, velocity = 0, timing?: MidiEventTiming) {
     this.pressedNotes.delete(note)
-    this.notify({ note, type: 'up', time: Date.now() })
+    this.notify({
+      note,
+      velocity,
+      type: 'up',
+      time: Date.now(),
+      ...timing,
+    })
   }
 
   releaseOutput(note: number) {
@@ -288,10 +344,11 @@ function onMidiMessage(e: MIDIMessageEvent) {
   }
 
   const { note, velocity } = msg
+  const timing = inputTiming(msg.timeStamp, 'web_midi')
   if (msg.type === 'on' && msg.velocity > 0) {
-    midiState.press(note, velocity)
+    midiState.press(note, velocity, timing)
   } else {
-    midiState.release(note)
+    midiState.release(note, velocity, timing)
   }
 }
 
@@ -325,7 +382,11 @@ function midiEventsToMidi(events: MidiEvent[]) {
 }
 
 // 使用歌曲时间驱动的分段录音（与 challenge 页、flushSilenceTo、stopRecording(songTimeSec, targetDurationSec) 一致）
-export { useSegmentedRecordMidi } from './useSegmentedRecordMidi'
+export {
+  useSegmentedRecordMidi,
+  type PerformanceEventsAudit,
+  type SegmentedRecording,
+} from './useSegmentedRecordMidi'
 
 export function record(midiState: MidiState) {
   const recording: MidiEvent[] = []

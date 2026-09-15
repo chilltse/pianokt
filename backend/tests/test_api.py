@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
 from pianokt_backend.api import app,user
+from fastapi import HTTPException
+import pytest
 
 def test_health_and_auth_required():
     c=TestClient(app)
@@ -27,3 +29,41 @@ def test_existing_whitelist_is_enforced(monkeypatch):
     assert exc.value.status_code==403
     monkeypatch.setattr(httpx,'post',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:True))
     assert user('Bearer fixture')==uid
+
+def test_performance_event_telemetry_validation():
+    from pianokt_backend.api import validate_performance_events
+    payload={
+        'schemaVersion':1,
+        'events':[
+            dict(sequence=0,type='note_on',midiEventTimestamp=100.0,playerSongTime=0.25,performanceNowTimestamp=100.1,pitch=60,velocity=90,timestampSource='web_midi'),
+            dict(sequence=1,type='note_off',midiEventTimestamp=300.0,playerSongTime=0.45,performanceNowTimestamp=300.1,pitch=60,velocity=0,timestampSource='web_midi'),
+        ],
+        'transportSegments':[
+            dict(sequence=0,type='start',playerSongTime=0.0,performanceNowTimestamp=0.0),
+            dict(sequence=1,type='stop',playerSongTime=0.5,performanceNowTimestamp=500.0),
+        ],
+    }
+    assert validate_performance_events(payload,2)==payload
+    payload['events'][1]['sequence']=0
+    with pytest.raises(HTTPException,match='sequence'):
+        validate_performance_events(payload,2)
+
+def test_performance_event_telemetry_requires_a_complete_transport_cycle():
+    from pianokt_backend.api import validate_performance_events
+    payload={
+        'schemaVersion':1,
+        'events':[],
+        'transportSegments':[
+            dict(sequence=0,type='start',playerSongTime=10.0,performanceNowTimestamp=100.0),
+        ],
+    }
+    with pytest.raises(HTTPException,match='start and end'):
+        validate_performance_events(payload,0)
+
+def test_alignment_window_settings_rejects_an_end_before_origin():
+    from pianokt_backend.api import validate_alignment_window_settings
+    with pytest.raises(HTTPException,match='Invalid observed_range'):
+        validate_alignment_window_settings({
+            'observed_range':{'start':10.0,'end':5.0},
+            'reference_time_origin_sec':10.0,
+        })

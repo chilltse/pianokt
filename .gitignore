@@ -18,7 +18,8 @@ tsconfig.tsbuildinfo
 .vercel/
 
 # Local debug
-tests/local_debug/
+tests/local_debug/*
+!tests/local_debug/alignment_debug.py
 
 # Additional notes
 *_mynotes.*

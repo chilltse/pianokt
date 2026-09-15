@@ -69,7 +69,7 @@ def test_training_cutoff_and_mask(tmp_path):
     tables=Tables(str(tmp_path/'lake'))
     from pianokt_backend.pipeline.tables import ENVELOPE_SCHEMA
     tables.merge('ops/completed_runs',[dict(event_id='r',event_type='alignment.completed',source_key='fixture',payload_json='{}')],ENVELOPE_SCHEMA,'event_id')
-    r=dict(attempt_id='a',alignment_run_id='r',learner_key='s',attempt_created_at='2026-01-01T00:00:00+00:00',practice_metadata={'settings':{'played_until_sec':1}},events_data={'data':{'right_hand':{'reject_reason':[0,-1,1],'onset_time':[0,500,2000],'pitches':[[60],[-1],[62]]}}})
+    r=dict(attempt_id='a',alignment_run_id='r',learner_key='s',alignment_quality_valid=True,attempt_created_at='2026-01-01T00:00:00+00:00',practice_metadata={'settings':{'played_until_sec':1}},events_data={'data':{'right_hand':{'reject_reason':[0,-1,1],'onset_time':[0,500,2000],'pitches':[[60],[-1],[62]]}}})
     r['alignment_completed_at']='2026-01-01T00:01:00+00:00'
     store.json('alignment/r/result.json',r)
     export_dataset(store,tables,'2026-02-01T00:00:00Z','datasets/test.json')

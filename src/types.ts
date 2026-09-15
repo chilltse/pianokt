@@ -125,6 +125,17 @@ export type MidiStateEvent = {
   note: number
   time: number
   velocity?: number
+  /**
+   * The timestamp supplied by the original browser input event. For Web MIDI
+   * this is MIDIMessageEvent.timeStamp; for browser-generated input it is the
+   * corresponding DOM event timestamp. It shares the performance.now() time
+   * origin in current browsers.
+   */
+  midiEventTimestamp?: number
+  /** Monotonic browser clock sampled when PianoKT handled the input event. */
+  performanceNowTimestamp?: number
+  /** Distinguishes physical Web MIDI input from browser-generated input. */
+  timestampSource?: 'web_midi' | 'browser_keyboard'
 }
 
 export type HandSettings = {

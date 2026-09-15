@@ -11,6 +11,15 @@ def export_dataset(objects,tables,cutoff,output_key):
         if not key.endswith('/result.json'): continue
         r=json.loads(objects.read(key))
         if r['alignment_run_id'] not in completed: continue
+        diagnostics=r.get('diagnostics',{})
+        summary=r.get('summary',{})
+        # Pre-quality-gate results are replay artifacts, not automatically
+        # trustworthy labels. A historical run can be explicitly re-aligned
+        # with the current matcher if it should contribute to training.
+        quality=r.get('alignment_quality_valid',diagnostics.get('alignment_quality_valid',summary.get('alignment_quality_valid',False)))
+        # A terminal quality rejection is intentionally committed so the raw
+        # result can be audited, but it must never become a training example.
+        if quality is not True: continue
         if not r.get('alignment_completed_at') or datetime.fromisoformat(r['alignment_completed_at'])>=boundary: continue
         if not r.get('attempt_created_at') or datetime.fromisoformat(r['attempt_created_at'])>=boundary: continue
         settings=r.get('practice_metadata',{}).get('settings',{})

@@ -30,6 +30,26 @@ export type RecordingUpload = {
   accuracyPct?: number
   difficulty?: number
   midiKeyboardUsed?: boolean
+  /** Immutable, per-key evidence used by the time-guided alignment worker. */
+  performanceEvents?: {
+    schemaVersion: 1
+    events: Array<{
+      sequence: number
+      type: 'note_on' | 'note_off'
+      midiEventTimestamp: number
+      playerSongTime: number
+      performanceNowTimestamp: number
+      pitch: number
+      velocity: number
+      timestampSource: 'web_midi' | 'browser_keyboard'
+    }>
+    transportSegments: Array<{
+      sequence: number
+      type: 'start' | 'resume' | 'pause' | 'stop'
+      playerSongTime: number
+      performanceNowTimestamp: number
+    }>
+  }
   cycle: {
     sessionId: string
     events: Array<{
@@ -56,35 +76,59 @@ export async function saveGcsRecording(
       reference = decode(params.referenceMidiBase64)
     const performanceHash = await hash(performance),
       referenceHash = await hash(reference)
-    const key = `pianokt-upload:${params.sessionId ?? params.songId}:${performanceHash}:${referenceHash}`
+    const performanceEvents = params.performanceEvents
+    const performanceEventsBytes = performanceEvents
+      ? new TextEncoder().encode(JSON.stringify(performanceEvents))
+      : undefined
+    const performanceEventsHash = performanceEventsBytes
+      ? await hash(performanceEventsBytes)
+      : undefined
+    const key = `pianokt-upload:${params.sessionId ?? params.songId}:${performanceHash}:${referenceHash}:${performanceEventsHash ?? 'legacy'}`
     const attemptId = sessionStorage.getItem(key) ?? crypto.randomUUID()
     sessionStorage.setItem(key, attemptId)
-    const urls = await backendRequest<{ performance_url: string; reference_url: string }>(
-      '/attempts',
-      {
-        attempt_id: attemptId,
-        song_id: params.songId,
-        song_source: params.songSource,
-        song_title: params.songTitle,
-        duration_sec: params.durationSec,
-        performance_hash: performanceHash,
-        reference_hash: referenceHash,
-        session_id: params.sessionId ?? null,
-        settings: {
-          ...params.practiceSettings,
-          client_accuracy_pct: params.accuracyPct,
-          client_difficulty: params.difficulty,
-          midi_keyboard_used: params.midiKeyboardUsed,
-        },
+    const urls = await backendRequest<{
+      performance_url: string
+      reference_url: string
+      performance_events_url?: string
+    }>('/attempts', {
+      attempt_id: attemptId,
+      song_id: params.songId,
+      song_source: params.songSource,
+      song_title: params.songTitle,
+      duration_sec: params.durationSec,
+      performance_hash: performanceHash,
+      reference_hash: referenceHash,
+      session_id: params.sessionId ?? null,
+      settings: {
+        ...params.practiceSettings,
+        client_accuracy_pct: params.accuracyPct,
+        client_difficulty: params.difficulty,
+        midi_keyboard_used: params.midiKeyboardUsed,
       },
-    )
-    for (const [url, bytes] of [
-      [urls.performance_url, performance],
-      [urls.reference_url, reference],
-    ] as const) {
+      ...(performanceEventsHash
+        ? {
+            performance_events_hash: performanceEventsHash,
+            performance_events_count: performanceEvents?.events.length,
+          }
+        : {}),
+    })
+    const uploads: Array<{ url: string; bytes: Uint8Array; contentType: string }> = [
+      { url: urls.performance_url, bytes: performance, contentType: 'audio/midi' },
+      { url: urls.reference_url, bytes: reference, contentType: 'audio/midi' },
+    ]
+    if (performanceEventsBytes) {
+      if (!urls.performance_events_url)
+        throw new Error('Backend did not provide a performance event upload URL')
+      uploads.push({
+        url: urls.performance_events_url,
+        bytes: performanceEventsBytes,
+        contentType: 'application/json',
+      })
+    }
+    for (const { url, bytes, contentType } of uploads) {
       const response = await fetch(url, {
         method: 'PUT',
-        headers: { 'Content-Type': 'audio/midi', 'x-goog-if-generation-match': '0' },
+        headers: { 'Content-Type': contentType, 'x-goog-if-generation-match': '0' },
         body: new Uint8Array(bytes),
       })
       if (!response.ok && response.status !== 412)
