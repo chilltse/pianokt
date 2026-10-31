@@ -24,12 +24,14 @@ def export_dataset(objects,tables,cutoff,output_key):
         if not r.get('attempt_created_at') or datetime.fromisoformat(r['attempt_created_at'])>=boundary: continue
         settings=r.get('practice_metadata',{}).get('settings',{})
         if settings.get('waiting'): continue
-        end=settings.get('played_until_sec',float('inf'))-(settings.get('range') or {}).get('start',0)
-        for hand,a in r['events_data']['data'].items():
-            for i,reason in enumerate(a['reject_reason']):
-                if reason==-1 or a['onset_time'][i]>end*1000: continue
-                examples.append(dict(learner_key=r['learner_key'],attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],hand=hand,onset_ms=a['onset_time'][i],pitches=a['pitches'][i],correct=int(reason==0),reject_reason=reason,attempt_created_at=r['attempt_created_at']))
-    examples.sort(key=lambda e:(e['learner_key'],e['attempt_created_at'],e['attempt_id'],e['onset_ms'],e['hand']))
+        data=r.get('events_data',{})
+        onsets=data.get('onset_seconds',[])
+        labels=(data.get('reject_reason') or {}).get('event',[])
+        if not isinstance(onsets,list) or not isinstance(labels,list) or len(onsets)!=len(labels):
+            raise ValueError('Invalid v1.1 attempt events')
+        for i,(onset,reason) in enumerate(zip(onsets,labels)):
+            examples.append(dict(learner_key=r['learner_key'],attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],event_index=i,onset_seconds=onset,pitches=data['pitches'][i],kc_vector=data['kc_vectors'][i],correct=1-int(reason),reject_reason=reason,attempt_created_at=r['attempt_created_at']))
+    examples.sort(key=lambda e:(e['learner_key'],e['attempt_created_at'],e['attempt_id'],e['onset_seconds'],e['event_index']))
     versions={}
     for e in examples: versions.setdefault(e['attempt_id'],set()).add(e['alignment_run_id'])
     if any(len(v)>1 for v in versions.values()): raise ValueError('Select one alignment version per attempt before training')

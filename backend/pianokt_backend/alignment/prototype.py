@@ -3,6 +3,8 @@ import json
 
 import warnings
 
+from functools import lru_cache
+
 from pathlib import Path
 
 from typing import Any
@@ -18,16 +20,17 @@ import pretty_midi
 TIMING_THRESHOLD_MS = 150
 
 INSERTION_ATTACH_WINDOW_SEC = 0.25
-
+# Position in white-key units inside an octave; black keys occupy the gap.
+KEY_X = (0, .5, 1, 1.5, 2, 3, 3.5, 4, 4.5, 5, 5.5, 6)
+# 训练标签的唯一权威定义（PianoKT schema v1.1）：
+# 0：正确；1：漏音；2：错音；3：节奏错误；4：错音且节奏错误。
+# 多弹音不挤占目标音的标签，写在 event.extra_notes；不存在 -1 或旧 5–6。
 REJECT_REASON = {
-    -1: "not_required",
-     0: "correct",
-     1: "missing_note",
-     2: "extra_note",
-     3: "wrong_pitch_or_substitution",
-     4: "too_early",
-     5: "too_late",
-     6: "multiple_or_other_error",
+    0: "correct",
+    1: "missed",
+    2: "wrong_pitch",
+    3: "timing_error",
+    4: "wrong_pitch_and_timing_error",
 }
 
 def first_existing_col(df: pd.DataFrame, candidates: list[str], required: bool = True) -> str | None:
@@ -65,14 +68,14 @@ def median_int(values: list[Any]) -> int | None:
     return int(round(float(np.median(valid_values))))
 
 def empty_record(onset_ms: int | None) -> dict[str, Any]:
-    """构造某个时刻中“不需要弹奏”的单手占位记录。"""
+    """Legacy helper retained for callers that need an empty hand record."""
     return {
-        "reject_reason": -1,
+        "reject_reason": 0,
         "timing_offset": None,
         "pitch_offset": None,
         "duration": None,
         "onset_time": onset_ms,
-        "pitches": [-1],
+        "pitches": [],
     }
 
 def classify_matched_note(
@@ -82,56 +85,37 @@ def classify_matched_note(
     timing_dev_col: str,
 ) -> int:
     """判断一条 match note 的 note-level 错误类型。"""
-    errors: list[int] = []
-
-    # 音高错误。
+    # 保留两个独立的观察结果；两者同时为真时用专门的类别 4。
+    pitch_error = False
     if pd.notna(row.get(ref_pitch_col)) and pd.notna(row.get(perf_pitch_col)):
         pitch_offset = int(round(row[perf_pitch_col] - row[ref_pitch_col]))
         if pitch_offset != 0:
-            errors.append(3)
+            pitch_error = True
 
     # 时间错误。
+    timing_error = False
     if pd.notna(row.get(timing_dev_col)):
         timing_ms = float(row[timing_dev_col]) * 1000
-
-        if timing_ms < -TIMING_THRESHOLD_MS:
-            errors.append(4)
-        elif timing_ms > TIMING_THRESHOLD_MS:
-            errors.append(5)
-
-    if len(errors) == 0:
-        return 0
-
-    if len(errors) == 1:
-        return errors[0]
-
-    return 6
+        if abs(timing_ms) > TIMING_THRESHOLD_MS:
+            timing_error = True
+    if pitch_error and timing_error:
+        return 4
+    if pitch_error:
+        return 2
+    return 3 if timing_error else 0
 
 def combine_reject_reasons(reasons: list[int | None]) -> int:
-    """把同一只手、同一个 event 中的多个 note-level 错误合并为一个 hand-level 错误。"""
-    reasons = [reason for reason in reasons if reason is not None and reason != -1]
-
-    if len(reasons) == 0:
-        return -1
-
-    nonzero = [reason for reason in reasons if reason != 0]
-
-    if len(nonzero) == 0:
-        return 0
-
-    # 同一只手同一时刻既有 deletion 又有 insertion，视为音高替换。
-    if 1 in nonzero and 2 in nonzero:
-        other_errors = [reason for reason in nonzero if reason not in (1, 2)]
-        if len(other_errors) == 0:
-            return 3
-        return 6
-
-    unique_errors = sorted(set(nonzero))
-
-    if len(unique_errors) == 1:
-        return unique_errors[0]
-
-    return 6
+    """Collapse target-note labels using the schema's fixed precedence."""
+    values = {reason for reason in reasons if reason is not None}
+    if 1 in values:
+        return 1
+    if 4 in values:
+        return 4
+    if 2 in values:
+        return 2
+    if 3 in values:
+        return 3
+    return 0
 
 def append_record(events_data: dict[str, Any], hand: str, record: dict[str, Any]) -> None:
     """把一个单手 event 追加到 events_data 对应数组中。"""
@@ -293,7 +277,7 @@ def parser_infer_hands(
 
         warnings.warn(
             f"{midi_label} 只有一个包含 note 的 track（track {only_track_id}）；"
-            "按照项目约定，将该 track 全部视为右手，左手记为 not_required。",
+            "按照项目约定，将该 track 全部视为右手，左手事件数组为空。",
             RuntimeWarning,
         )
 
@@ -516,7 +500,7 @@ def build_two_hand_events_data(
     - 与 Yousician events_data 近似的 JSON 字符串。
 
     左右手来源：
-    - 原曲只有一个带 note 的 track：全部按右手处理，左手为 not_required。
+    - 原曲只有一个带 note 的 track：全部按右手处理，左手为一个空数组。
     - 原曲有两个候选 track：按名称或平均音高推断左右手。
     - match / deletion：使用原曲 MIDI 中该 reference note 所属 track。
     - insertion：单轨原曲全部归右手；双轨原曲根据最近 reference event 判断。
@@ -780,7 +764,7 @@ def build_two_hand_events_data(
                 ].copy()
             else:
                 # 单轨右手模式下，left_hand 的 track_id 为 None，
-                # 因而左手在所有 event 中保持 not_required。
+                # 因而左手在所有 event 中保持空音高数组。
                 ref_hand_rows = pd.DataFrame(columns=df.columns)
 
             # insertion 已根据最近的原曲 event 上下文判断左右手。
@@ -917,3 +901,146 @@ def build_two_hand_events_data(
         append_record(events_data, "right_hand", hand_records["right_hand"])
 
     return json.dumps(events_data, ensure_ascii=False)
+
+
+KC_FEATURE_NAMES = [
+    "has_black_key", "simultaneous_note_count", "both_hands",
+    "onset_interval_bin_cs", "change_count", "mean_move_bin",
+]
+
+
+def _white_key_x(pitch: int) -> float:
+    """Physical white-key coordinate; black keys lie between adjacent whites."""
+    octave, pitch_class = divmod(int(pitch), 12)
+    return 7 * octave + KEY_X[pitch_class]
+
+
+def _hand_move(previous: set[int], current: set[int]) -> tuple[float, int]:
+    """Maximum-cardinality, minimum white-key-distance matching for one hand."""
+    old, new = sorted(previous), sorted(current)
+    if not old or not new:
+        return 0.0, 0
+    # Matching sorted pitches in order is optimal for absolute one-dimensional
+    # distance. DP also makes the cardinality rule explicit for unequal chords.
+    small, large = (old, new) if len(old) <= len(new) else (new, old)
+    @lru_cache(None)
+    def solve(i: int, j: int) -> float:
+        if i == len(small):
+            return 0.0
+        if len(large) - j < len(small) - i:
+            return float("inf")
+        return min(
+            abs(_white_key_x(small[i]) - _white_key_x(large[j])) + solve(i + 1, j + 1),
+            solve(i, j + 1),
+        )
+    return solve(0, 0), len(small)
+
+
+def _interval_bin(seconds: float | None) -> int | None:
+    if seconds is None:
+        return None
+    return 10 if seconds < .2 else 30 if seconds < .4 else 50 if seconds < .6 else 70 if seconds < .8 else 90
+
+
+def _move_bin(distance: float | None) -> int | None:
+    if distance is None:
+        return None
+    if distance == 0:
+        return 0
+    if distance <= 2:
+        return 1
+    if distance <= 5:
+        return 2
+    if distance <= 9:
+        return 3
+    return 4
+
+
+def build_attempt_events_data(
+    df: pd.DataFrame,
+    reference_midi_path: str | Path,
+) -> dict[str, Any]:
+    """Build the schema-v1.1 target-onset record from an observed score range.
+
+    ``df`` is already restricted by the time-guided matcher to the score range
+    actually covered by the performance. Therefore no score event after the
+    played range can become a deletion. The reference MIDI supplies hand truth;
+    the dataframe supplies only performance outcomes.
+    """
+    required = {"alignment_type", "ref_onset_sec", "ref_pitch", "ref_track", "performance_pitch", "performance_onset_sec_global_aligned", "timing_deviation_global_aligned"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Attempt exporter missing columns: {sorted(missing)}")
+    song = parse_midi_song_for_hand_inference(reference_midi_path)
+    hands = parser_infer_hands(song, "原曲 MIDI")
+    track_hand = {track: hand for hand, track in hands.items() if track is not None}
+    refs = df[df["alignment_type"].isin(["match", "deletion"])].copy()
+    refs = refs[refs["ref_track"].isin(track_hand)].copy()
+    refs["_time"] = pd.to_numeric(refs["ref_onset_sec"], errors="coerce").round(9)
+    refs = refs[refs["_time"].notna()]
+    event_times = sorted(float(value) for value in refs["_time"].unique())
+    events: list[dict[str, Any]] = []
+    for onset in event_times:
+        rows = refs[refs["_time"] == onset]
+        per_hand: list[list[int]] = []
+        note_reasons: list[list[int]] = []
+        timing_offsets: list[list[int | None]] = []
+        pitch_offsets: list[list[int | None]] = []
+        for hand in ("left", "right"):
+            track = hands[hand]
+            hand_rows = rows[rows["ref_track"] == track].sort_values("ref_pitch") if track is not None else rows.iloc[0:0]
+            # Schema says simultaneous duplicate pitches are de-duplicated.
+            chosen = hand_rows.drop_duplicates(subset=["ref_pitch"], keep="first")
+            pitches, reasons, timings, pitch_deltas = [], [], [], []
+            for _, row in chosen.iterrows():
+                pitch = int(round(row["ref_pitch"]))
+                pitches.append(pitch)
+                if row["alignment_type"] == "deletion":
+                    reasons.append(1); timings.append(None); pitch_deltas.append(None)
+                    continue
+                reasons.append(classify_matched_note(row, "ref_pitch", "performance_pitch", "timing_deviation_global_aligned"))
+                timings.append(sec_to_ms(row.get("timing_deviation_global_aligned")))
+                pitch_deltas.append(int(round(row["performance_pitch"] - row["ref_pitch"])) if pd.notna(row.get("performance_pitch")) else None)
+            per_hand.append(pitches); note_reasons.append(reasons); timing_offsets.append(timings); pitch_offsets.append(pitch_deltas)
+        events.append(dict(onset=onset, pitches=per_hand, note=note_reasons, timing=timing_offsets, pitch_offset=pitch_offsets, extra=[]))
+
+    # Every unmatched performance note is assigned once to the nearest target
+    # onset, within the fixed attachment window. It never receives a target-note
+    # error code and is never allowed to duplicate an already matched note.
+    for _, row in df[df["alignment_type"] == "insertion"].iterrows():
+        perf_onset = row.get("performance_onset_sec_global_aligned")
+        if not event_times or pd.isna(perf_onset) or pd.isna(row.get("performance_pitch")):
+            continue
+        index = min(range(len(events)), key=lambda i: abs(events[i]["onset"] - float(perf_onset)))
+        if abs(events[index]["onset"] - float(perf_onset)) <= INSERTION_ATTACH_WINDOW_SEC:
+            events[index]["extra"].append(int(round(row["performance_pitch"])))
+
+    previous_hand: dict[str, set[int]] = {"left": set(), "right": set()}
+    previous_hand_time: dict[str, float | None] = {"left": None, "right": None}
+    previous_global: float | None = None
+    onset_seconds=[]; pitches=[]; intervals=[]; vectors=[]; event_labels=[]; note_labels=[]; timing=[]; pitch_delta=[]; extras=[]
+    for event in events:
+        onset = event["onset"]; current = {"left": set(event["pitches"][0]), "right": set(event["pitches"][1])}
+        hand_intervals=[]; total_distance=0.0; total_matches=0; changes=0
+        for hand in ("left", "right"):
+            if current[hand]:
+                hand_intervals.append(None if previous_hand_time[hand] is None else onset - previous_hand_time[hand])
+                distance, matches = _hand_move(previous_hand[hand], current[hand])
+                total_distance += distance; total_matches += matches; changes += len(current[hand] - previous_hand[hand])
+                previous_hand[hand] = current[hand]; previous_hand_time[hand] = onset
+            else:
+                hand_intervals.append(None)
+        global_interval = None if previous_global is None else onset - previous_global
+        previous_global = onset
+        flat = current["left"] | current["right"]
+        mean_move = total_distance / total_matches if total_matches else None
+        onset_seconds.append(onset); pitches.append(event["pitches"]); intervals.append([*hand_intervals, global_interval])
+        vectors.append([any(p % 12 in (1, 3, 6, 8, 10) for p in flat), len(current["left"]) + len(current["right"]), bool(current["left"] and current["right"]), _interval_bin(global_interval), changes, _move_bin(mean_move)])
+        note_labels.append(event["note"]); timing.append(event["timing"]); pitch_delta.append(event["pitch_offset"]); extras.append(sorted(event["extra"]))
+        event_labels.append(int(any(code != 0 for hand in event["note"] for code in hand) or bool(event["extra"])))
+    return {
+        "kc_feature_names": KC_FEATURE_NAMES, "onset_seconds": onset_seconds, "pitches": pitches,
+        "intervals_seconds": intervals, "kc_vectors": vectors,
+        "reject_reason": {"event": event_labels, "note": note_labels},
+        "timing_offset_ms": timing, "pitch_offset_semitones": pitch_delta, "extra_notes": extras,
+    }

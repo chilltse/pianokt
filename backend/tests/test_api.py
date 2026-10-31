@@ -22,6 +22,8 @@ def test_existing_whitelist_is_enforced(monkeypatch):
     from fastapi import HTTPException
     monkeypatch.setenv('SUPABASE_URL','https://example.invalid')
     monkeypatch.setenv('SUPABASE_ANON_KEY','public-key')
+    monkeypatch.delenv('PIANOKT_LOCAL_DEV_BYPASS',raising=False)
+    monkeypatch.delenv('PIANOKT_ENV',raising=False)
     uid='00000000-0000-0000-0000-000000000001'
     monkeypatch.setattr(httpx,'get',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:{'id':uid}))
     monkeypatch.setattr(httpx,'post',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:False))
@@ -29,6 +31,33 @@ def test_existing_whitelist_is_enforced(monkeypatch):
     assert exc.value.status_code==403
     monkeypatch.setattr(httpx,'post',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:True))
     assert user('Bearer fixture')==uid
+
+def test_local_development_can_bypass_only_the_access_list(monkeypatch):
+    from types import SimpleNamespace
+    import httpx
+    monkeypatch.setenv('SUPABASE_URL','https://example.invalid')
+    monkeypatch.setenv('SUPABASE_ANON_KEY','public-key')
+    monkeypatch.setenv('PIANOKT_ENV','development')
+    monkeypatch.setenv('PIANOKT_LOCAL_DEV_BYPASS','1')
+    monkeypatch.delenv('K_SERVICE',raising=False)
+    uid='00000000-0000-0000-0000-000000000001'
+    monkeypatch.setattr(httpx,'get',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:{'id':uid}))
+    monkeypatch.setattr(httpx,'post',lambda *a,**kw:pytest.fail('allow-list RPC must not run locally'))
+    assert user('Bearer fixture')==uid
+
+def test_cloud_run_cannot_enable_the_local_access_list_bypass(monkeypatch):
+    from types import SimpleNamespace
+    import httpx
+    monkeypatch.setenv('SUPABASE_URL','https://example.invalid')
+    monkeypatch.setenv('SUPABASE_ANON_KEY','public-key')
+    monkeypatch.setenv('PIANOKT_ENV','development')
+    monkeypatch.setenv('PIANOKT_LOCAL_DEV_BYPASS','1')
+    monkeypatch.setenv('K_SERVICE','pianokt-api')
+    uid='00000000-0000-0000-0000-000000000001'
+    monkeypatch.setattr(httpx,'get',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:{'id':uid}))
+    monkeypatch.setattr(httpx,'post',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:False))
+    with pytest.raises(HTTPException) as exc: user('Bearer fixture')
+    assert exc.value.status_code==403
 
 def test_performance_event_telemetry_validation():
     from pianokt_backend.api import validate_performance_events

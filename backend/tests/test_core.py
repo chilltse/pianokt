@@ -26,9 +26,16 @@ def test_offset():
 def test_config_isolation():
     a=configured_labels(AlignmentConfig(timing_threshold_ms=100)); b=configured_labels(AlignmentConfig(timing_threshold_ms=200))
     row=pd.Series(dict(r=60,p=60,t=0.15))
-    assert a.classify_matched_note(row,'r','p','t')==5
+    assert a.classify_matched_note(row,'r','p','t')==3
     assert b.classify_matched_note(row,'r','p','t')==0
-    assert a.combine_reject_reasons([1,2])==3
+    assert a.combine_reject_reasons([1,2])==1
+
+def test_v11_error_codes_have_fixed_priority():
+    labels=configured_labels(AlignmentConfig(timing_threshold_ms=100))
+    assert labels.classify_matched_note(pd.Series(dict(r=60,p=61,t=.01)),'r','p','t') == 2
+    assert labels.classify_matched_note(pd.Series(dict(r=60,p=60,t=-.101)),'r','p','t') == 3
+    assert labels.classify_matched_note(pd.Series(dict(r=60,p=61,t=.3)),'r','p','t') == 4
+    assert labels.classify_matched_note(pd.Series(dict(r=60,p=60,t=.1)),'r','p','t') == 0
 
 def test_immutable(tmp_path):
     o=Objects(str(tmp_path)); o.put('a',b'a'); o.put('a',b'a')
@@ -40,7 +47,7 @@ def test_real_alignment_replay_and_quality(tmp_path):
     stages=[]; r=align(ref,perf,'fixture',stage_sink=lambda key,data:stages.append(data))
     assert r['summary']['expected_notes']==12 and r['summary']['correct_notes']==12
     assert abs(r['diagnostics']['global_offset_sec']-0.5)<0.001
-    assert set(r['events_data']['data']['left_hand']['reject_reason'])=={-1}
+    assert all(event[0]==[] for event in r['events_data']['pitches'])
     assert len(stages)==1 and len(stages[0]['raw_matches'])==12
     r.update(learner_key='synthetic',song_id='scale')
     store=Objects(str(tmp_path/'raw')); tables=Tables(str(tmp_path/'lake'))
@@ -49,7 +56,7 @@ def test_real_alignment_replay_and_quality(tmp_path):
     assert catch_up(store,tables)==0
     assert catch_up(store,tables,True)==1
     assert len(tables.rows('gold/fact_midi_alignment'))==12
-    assert len(tables.rows('gold/hand_events'))==24
+    assert len(tables.rows('gold/attempt_events'))==12
     bad=json.loads(json.dumps(r)); bad['alignment_run_id']='bad'; bad['notes'][0]['reject_reason']=99
     store.json('alignment/bad/result.json',bad)
     with pytest.raises(RuntimeError): catch_up(store,tables)
@@ -69,11 +76,11 @@ def test_training_cutoff_and_mask(tmp_path):
     tables=Tables(str(tmp_path/'lake'))
     from pianokt_backend.pipeline.tables import ENVELOPE_SCHEMA
     tables.merge('ops/completed_runs',[dict(event_id='r',event_type='alignment.completed',source_key='fixture',payload_json='{}')],ENVELOPE_SCHEMA,'event_id')
-    r=dict(attempt_id='a',alignment_run_id='r',learner_key='s',alignment_quality_valid=True,attempt_created_at='2026-01-01T00:00:00+00:00',practice_metadata={'settings':{'played_until_sec':1}},events_data={'data':{'right_hand':{'reject_reason':[0,-1,1],'onset_time':[0,500,2000],'pitches':[[60],[-1],[62]]}}})
+    r=dict(attempt_id='a',alignment_run_id='r',learner_key='s',alignment_quality_valid=True,attempt_created_at='2026-01-01T00:00:00+00:00',practice_metadata={'settings':{}},events_data={'onset_seconds':[0,.5,2], 'pitches':[[[],[60]],[[],[61]],[[],[62]]], 'kc_vectors':[[False,1,False,None,1,None]]*3, 'reject_reason':{'event':[0,0,1],'note':[[[],[0]],[[],[0]],[[],[1]]]}})
     r['alignment_completed_at']='2026-01-01T00:01:00+00:00'
     store.json('alignment/r/result.json',r)
     export_dataset(store,tables,'2026-02-01T00:00:00Z','datasets/test.json')
     data=json.loads(store.read('datasets/test.json'))
-    assert len(data['examples'])==1
+    assert len(data['examples'])==3
     export_dataset(store,tables,'2025-02-01T00:00:00Z','datasets/empty.json')
     assert json.loads(store.read('datasets/empty.json'))['examples']==[]

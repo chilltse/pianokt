@@ -3,6 +3,7 @@ import os
 import json
 import math
 import uuid
+import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,18 +16,33 @@ from .online import connect,owned_attempt
 from .storage import Objects
 from .contracts import check_midi,digest
 from .inference import DemoRecommender
+from .alignment.service import align
 
 app=FastAPI(title='PianoKT API',version='0.1.0')
 app.add_middleware(CORSMiddleware,allow_origins=os.getenv('FRONTEND_ORIGINS','http://localhost:5173').split(','),allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type'])
+
+def local_development_access_list_bypass_enabled():
+    """Allow an authenticated local developer to bypass only the allow-list.
+
+    This is intentionally unavailable in Cloud Run (``K_SERVICE`` is injected
+    there) and requires two explicit local environment variables. Authentication
+    against Supabase still happens first, so this is not an anonymous/dev token.
+    """
+    return (
+        os.getenv('PIANOKT_ENV')=='development'
+        and os.getenv('PIANOKT_LOCAL_DEV_BYPASS')=='1'
+        and not os.getenv('K_SERVICE')
+    )
 
 def user(authorization:str=Header(...)):
     if not authorization.startswith('Bearer '): raise HTTPException(401,'Bearer token required')
     try:
         r=httpx.get(os.environ['SUPABASE_URL'].rstrip('/')+'/auth/v1/user',headers={'Authorization':authorization,'apikey':os.environ['SUPABASE_ANON_KEY']},timeout=10)
         if r.status_code!=200: raise HTTPException(401,'Invalid session')
-        allowed=httpx.post(os.environ['SUPABASE_URL'].rstrip('/')+'/rest/v1/rpc/check_user_allowed',headers={'Authorization':authorization,'apikey':os.environ['SUPABASE_ANON_KEY']},json={},timeout=10)
-        if allowed.status_code!=200: raise HTTPException(503,'Access policy unavailable')
-        if allowed.json() is not True: raise HTTPException(403,'Account is not on the access list')
+        if not local_development_access_list_bypass_enabled():
+            allowed=httpx.post(os.environ['SUPABASE_URL'].rstrip('/')+'/rest/v1/rpc/check_user_allowed',headers={'Authorization':authorization,'apikey':os.environ['SUPABASE_ANON_KEY']},json={},timeout=10)
+            if allowed.status_code!=200: raise HTTPException(503,'Access policy unavailable')
+            if allowed.json() is not True: raise HTTPException(403,'Account is not on the access list')
         return str(uuid.UUID(r.json()['id']))
     except httpx.HTTPError as exc: raise HTTPException(503,'Auth unavailable') from exc
 
@@ -71,8 +87,19 @@ class ChallengeCycle(BaseModel):
 class Finalize(BaseModel):
     cycle:ChallengeCycle
 
+class LocalAlignment(BaseModel):
+    performance_midi_base64:str=Field(min_length=1,max_length=12_000_000)
+    reference_midi_base64:str=Field(min_length=1,max_length=12_000_000)
+    performance_events:dict|None=None
+    observed_end_sec:float=Field(ge=0,le=14400)
+    reference_origin_sec:float=Field(ge=0,le=14400)
+
 def finite_number(value):
     return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value)
+
+def local_alignment_lab_enabled():
+    """Strictly local preflight: never enabled in Cloud Run or by default."""
+    return os.getenv('PIANOKT_ENV')=='development' and os.getenv('PIANOKT_LOCAL_ALIGNMENT_LAB')=='1' and not os.getenv('K_SERVICE')
 
 def validate_alignment_window_settings(settings):
     """Reject contradictory snapshot-window metadata before creating an attempt.
@@ -237,6 +264,31 @@ def commit_cycle(c,row,uid,cycle,timestamps):
 
 @app.get('/health')
 def health(): return {'status':'ok'}
+
+@app.post('/debug/local-align')
+def local_align(body:LocalAlignment):
+    """Run and persist a local-only dataset sample; no GCS or database access."""
+    if not local_alignment_lab_enabled(): raise HTTPException(404,'Not found')
+    try:
+        performance=base64.b64decode(body.performance_midi_base64,validate=True)
+        reference=base64.b64decode(body.reference_midi_base64,validate=True)
+    except Exception as exc: raise HTTPException(422,'Invalid MIDI base64') from exc
+    with TemporaryDirectory(prefix='pianokt-local-align-') as tmp:
+        root=Path(tmp); performance_path=root/'performance.mid'; reference_path=root/'reference.mid'
+        performance_path.write_bytes(performance); reference_path.write_bytes(reference)
+        try:
+            check_midi(performance_path); check_midi(reference_path)
+        except ValueError as exc: raise HTTPException(422,str(exc)) from exc
+        events=body.performance_events
+        # A random local attempt ID makes every take an immutable file, even
+        # when the student plays the same notes twice. This endpoint is only
+        # enabled in explicit local-development mode.
+        result=align(reference_path,performance_path,f'local-{uuid.uuid4()}',performance_events=events,transport_segments=events.get('transportSegments') if events else None,observed_end_sec=body.observed_end_sec,reference_origin_sec=body.reference_origin_sec)
+        output_dir=Path(os.getenv('PIANOKT_LOCAL_ALIGNMENT_OUTPUT_DIR','data/local-alignment')).expanduser().resolve()
+        output_dir.mkdir(parents=True,exist_ok=True)
+        output_path=output_dir/f"{result['alignment_run_id']}.json"
+        output_path.write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+        return {**result,'local_output_path':str(output_path)}
 
 @app.post('/attempts')
 def create_attempt(body:Upload,uid=Depends(user)):

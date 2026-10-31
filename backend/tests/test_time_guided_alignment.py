@@ -131,6 +131,10 @@ def test_short_opening_cannot_match_repeated_late_phrase(tmp_path):
     assert round(result["diagnostics"]["raw_timing_median_sec"], 4) == 0.1
     assert {note["ref_onset_sec"] for note in result["notes"]} == {0.0, 0.5, 1.0}
     assert {round(note["raw_timing_deviation_sec"], 4) for note in result["notes"]} == {0.1}
+    # Only the performance-covered score range becomes target events. The late
+    # repeated phrase is absent, not labelled as three missed notes.
+    assert result["events_data"]["onset_seconds"] == [0.0, 0.5, 1.0]
+    assert all(label == 0 for label in result["events_data"]["reject_reason"]["event"])
 
 
 def test_seeked_snapshot_origin_and_reversed_chord_order_are_valid(tmp_path):
@@ -236,6 +240,11 @@ def test_gold_is_quality_gated_and_attempt_fact_is_current_per_attempt(tmp_path)
     assert len(gold_rows) == 2
     assert "payload_json" not in gold_rows[0]
     assert gold_rows[0]["performance_player_song_time_sec"] is not None
+    assert gold_rows[0]["attempt_created_at_jst"] == "2026-09-01T09:00:00+09:00"
+    assert gold_rows[0]["alignment_completed_date_jst"] == "2026-09-01"
+    first_attempt = tables.rows("gold/fact_alignment_attempt")[0]
+    assert first_attempt["attempt_date_jst"] == "2026-09-01"
+    assert first_attempt["alignment_completed_at_jst"] == "2026-09-01T09:01:00+09:00"
 
     rerun = enrich_for_lake(
         align(

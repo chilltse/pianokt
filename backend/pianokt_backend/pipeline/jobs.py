@@ -13,6 +13,8 @@ serving row:
 import json
 import math
 from collections.abc import Mapping
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from ..contracts import stable_id
 from .tables import (
@@ -21,10 +23,13 @@ from .tables import (
     BRONZE_TRANSPORT_SEGMENT_SCHEMA,
     ENVELOPE_SCHEMA,
     GOLD_ALIGNMENT_EVENT_SCHEMA,
-    HAND_SCHEMA,
+    ATTEMPT_EVENT_SCHEMA,
     LEGACY_SUMMARY_SCHEMA,
     SILVER_ALIGNMENT_EVENT_SCHEMA,
 )
+
+
+JAPAN_TIME_ZONE = ZoneInfo('Asia/Tokyo')
 
 
 def _json(value):
@@ -33,6 +38,30 @@ def _json(value):
 
 def _string(value):
     return None if value is None else str(value)
+
+
+def _jst_timestamp(value):
+    """Render an absolute ISO timestamp in Japan time without changing its instant.
+
+    UTC remains the canonical storage format. These companion values make lake
+    queries and exports deterministic for the product's Japanese operating
+    calendar, rather than inheriting whichever time zone ran a query.
+    """
+    text = _string(value)
+    if text is None:
+        return None
+    try:
+        timestamp = datetime.fromisoformat(text.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None:
+        return None
+    return timestamp.astimezone(JAPAN_TIME_ZONE).isoformat()
+
+
+def _jst_date(value):
+    timestamp = _jst_timestamp(value)
+    return timestamp[:10] if timestamp else None
 
 
 def _float(value):
@@ -116,6 +145,8 @@ def _metadata(result):
     practice = practice if isinstance(practice, Mapping) else {}
     config = result.get('config')
     config = config if isinstance(config, Mapping) else {}
+    attempt_created_at = _string(result.get('attempt_created_at'))
+    alignment_completed_at = _string(result.get('alignment_completed_at'))
     return {
         'alignment_run_id': _string(result.get('alignment_run_id')),
         'attempt_id': _string(result.get('attempt_id')),
@@ -126,7 +157,12 @@ def _metadata(result):
         'performance_hash': _string(result.get('performance_hash')),
         'alignment_version': _string(_first(result, 'alignment_version') or _first(config, 'version')),
         'matcher_version': _string(result.get('matcher_version')),
-        'alignment_completed_at': _string(result.get('alignment_completed_at')),
+        'attempt_created_at': attempt_created_at,
+        'attempt_created_at_jst': _jst_timestamp(attempt_created_at),
+        'attempt_date_jst': _jst_date(attempt_created_at),
+        'alignment_completed_at': alignment_completed_at,
+        'alignment_completed_at_jst': _jst_timestamp(alignment_completed_at),
+        'alignment_completed_date_jst': _jst_date(alignment_completed_at),
     }
 
 
@@ -386,7 +422,11 @@ def _alignment_notes(result, meta, source_key, quality_valid, quality_reason):
             errors.append('duplicate_alignment_event_id')
             continue
         seen_ids.add(event_id)
-        if label not in ('match', 'deletion', 'insertion') or reject_reason not in range(7):
+        if label not in ('match', 'deletion', 'insertion'):
+            errors.append('invalid_label')
+        elif label == 'insertion' and reject_reason is not None:
+            errors.append('insertion_has_target_label')
+        elif label != 'insertion' and reject_reason not in range(5):
             errors.append('invalid_label')
         if label in ('match', 'deletion') and raw.get('ref_id') is None:
             errors.append('missing_reference')
@@ -446,46 +486,43 @@ def _alignment_notes(result, meta, source_key, quality_valid, quality_reason):
     return notes, errors
 
 
-def _hand_rows(result, meta):
-    errors = []
-    hands = result.get('events_data')
-    hands = hands.get('data') if isinstance(hands, Mapping) else None
-    if not isinstance(hands, Mapping):
+def _attempt_event_rows(result, meta):
+    data = result.get('events_data')
+    if not isinstance(data, Mapping):
         return [], ['invalid_events_data']
-    rows = []
-    for hand, arrays in hands.items():
-        if not isinstance(arrays, Mapping):
-            errors.append('invalid_hand_data')
-            continue
-        lengths = {len(value) for value in arrays.values() if isinstance(value, list)}
-        if len(lengths) != 1 or len(lengths) == 0 or any(not isinstance(value, list) for value in arrays.values()):
-            errors.append('hand_array_length')
-            continue
-        if 'reject_reason' not in arrays:
-            errors.append('missing_hand_reject_reason')
-            continue
-        for index in range(len(arrays['reject_reason'])):
-            try:
-                item = {key: value[index] for key, value in arrays.items()}
-            except (IndexError, TypeError):
-                errors.append('hand_array_length')
-                break
-            pitches = item.get('pitches')
-            if not isinstance(pitches, list) or any(_integer(pitch) is None for pitch in pitches):
-                errors.append('invalid_hand_pitches')
-            rows.append(
-                dict(
-                    meta,
-                    event_id=stable_id(meta['alignment_run_id'], hand, index),
-                    hand=_string(hand),
-                    reject_reason=_integer(item.get('reject_reason')),
-                    timing_offset=_float(item.get('timing_offset')),
-                    pitch_offset=_float(item.get('pitch_offset')),
-                    duration=_float(item.get('duration')),
-                    onset_time=_float(item.get('onset_time')),
-                    pitches=[_integer(pitch) for pitch in pitches] if isinstance(pitches, list) else None,
-                )
-            )
+    names = ('onset_seconds', 'pitches', 'intervals_seconds', 'kc_vectors', 'timing_offset_ms', 'pitch_offset_semitones', 'extra_notes')
+    reasons = data.get('reject_reason')
+    if not isinstance(reasons, Mapping) or not isinstance(reasons.get('event'), list) or not isinstance(reasons.get('note'), list):
+        return [], ['invalid_event_reject_reason']
+    arrays = [data.get(name) for name in names] + [reasons['event'], reasons['note']]
+    if any(not isinstance(value, list) for value in arrays):
+        return [], ['invalid_event_arrays']
+    lengths = {len(value) for value in arrays}
+    if len(lengths) != 1:
+        return [], ['event_array_length']
+    rows, errors = [], []
+    for index in range(len(reasons['event'])):
+        pitches = data['pitches'][index]
+        note = reasons['note'][index]
+        timing = data['timing_offset_ms'][index]
+        delta = data['pitch_offset_semitones'][index]
+        if (not isinstance(pitches, list) or len(pitches) != 2 or not all(isinstance(hand, list) for hand in pitches)
+                or not all(isinstance(item, list) and len(item) == 2 and all(
+                    isinstance(item[hand], list) and len(item[hand]) == len(pitches[hand])
+                    for hand in (0, 1)
+                ) for item in (note, timing, delta))):
+            errors.append('invalid_event_note_shape'); continue
+        if any(code not in range(5) for hand in note for code in hand) or data['reject_reason']['event'][index] not in (0, 1):
+            errors.append('invalid_event_label'); continue
+        derived = int(any(code != 0 for hand in note for code in hand) or bool(data['extra_notes'][index]))
+        if derived != data['reject_reason']['event'][index]:
+            errors.append('invalid_event_derivation'); continue
+        rows.append(dict(meta, event_id=stable_id(meta['alignment_run_id'], index), event_index=index,
+            onset_seconds=_float(data['onset_seconds'][index]), pitches=pitches,
+            intervals_seconds=data['intervals_seconds'][index], kc_vector_json=_json(data['kc_vectors'][index]),
+            reject_reason_event=data['reject_reason']['event'][index], reject_reason_note_json=_json(note),
+            timing_offset_ms_json=_json(timing), pitch_offset_semitones_json=_json(delta),
+            extra_notes=data['extra_notes'][index]))
     return rows, errors
 
 
@@ -565,8 +602,8 @@ def publish_alignment(result, tables, source_key):
     notes, note_errors = _alignment_notes(
         result, meta, source_key, quality_valid, quality_reason
     )
-    hand_rows, hand_errors = _hand_rows(result, meta)
-    errors = sorted(set(raw_errors + note_errors + hand_errors))
+    attempt_events, event_errors = _attempt_event_rows(result, meta)
+    errors = sorted(set(raw_errors + note_errors + event_errors))
     if errors:
         tables.merge(
             'quality/alignment_runs',
@@ -630,7 +667,7 @@ def publish_alignment(result, tables, source_key):
         GOLD_ALIGNMENT_EVENT_SCHEMA,
         'alignment_event_id',
     )
-    tables.merge('gold/hand_events', hand_rows, HAND_SCHEMA, 'event_id')
+    tables.merge('gold/attempt_events', attempt_events, ATTEMPT_EVENT_SCHEMA, 'event_id')
     attempt_summary = _attempt_summary(result, meta, quality_valid, quality_reason)
     tables.merge(
         'gold/fact_alignment_attempt',

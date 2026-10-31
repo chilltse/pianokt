@@ -430,16 +430,24 @@ def align(
     )
 
     labels = configured_labels(config)
-    hands = (
-        json.loads(labels.build_two_hand_events_data(df, reference, performance))
-        if reference_chords else _empty_events_data()
-    )
+    # Export only the score events inside the observed performance range.  This
+    # is the canonical v1.1 onset dataset; later score events are absent rather
+    # than fabricated as deletions.
+    hands = labels.build_attempt_events_data(df, reference) if reference_chords else {
+        "kc_feature_names": labels.KC_FEATURE_NAMES,
+        "onset_seconds": [], "pitches": [], "intervals_seconds": [], "kc_vectors": [],
+        "reject_reason": {"event": [], "note": []}, "timing_offset_ms": [],
+        "pitch_offset_semitones": [], "extra_notes": [],
+    }
+    # Error codes belong exclusively to target score notes. An insertion is an
+    # extra performance note, so it has no target-note reject_reason; it is
+    # represented by events_data.extra_notes instead.
     df["reject_reason"] = [
-        1 if row.alignment_type == "deletion" else 2 if row.alignment_type == "insertion"
+        None if row.alignment_type == "insertion" else 1 if row.alignment_type == "deletion"
         else labels.classify_matched_note(row, "ref_pitch", "performance_pitch", "timing_deviation_global_aligned")
         for _, row in df.iterrows()
     ]
-    df["is_correct"] = df.reject_reason == 0
+    df["is_correct"] = (df.alignment_type == "match") & (df.reject_reason == 0)
     df["within_observed_range"] = True
     df["timing_labels_valid"] = quality_valid
     score_hash, performance_hash = digest(reference.read_bytes()), digest(performance.read_bytes())
@@ -503,7 +511,7 @@ def align(
             "raw_matches": raw_records,
         })
     return {
-        "schema_version": 2, "alignment_run_id": run_id, "attempt_id": attempt_id,
+        "schema_version": 3, "alignment_run_id": run_id, "attempt_id": attempt_id,
         "score_version": score_hash, "performance_hash": performance_hash,
         "config": config.identity, "matcher_version": matcher_version(),
         "alignment_context": context, "diagnostics": diagnostics, "summary": summary,

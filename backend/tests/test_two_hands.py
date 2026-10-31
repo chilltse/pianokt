@@ -8,10 +8,9 @@ def test_meta_track_and_two_hands(tmp_path):
     ref=tmp_path/'r.mid'; perf=tmp_path/'p.mid'; mod.write(ref); mod.write(perf,480)
     result=align(ref,perf,'two-hands')
     assert result['summary']['correct_notes']==24
-    hands=result['events_data']['data']
-    assert set(hands['left_hand']['reject_reason'])=={0}
-    assert set(hands['right_hand']['reject_reason'])=={0}
-    assert max(hands['left_hand']['pitches'][0])<min(hands['right_hand']['pitches'][0])
+    events=result['events_data']
+    assert set(events['reject_reason']['event'])=={0}
+    assert max(events['pitches'][0][0])<min(events['pitches'][0][1])
     assert set(n['ref_track'] for n in result['notes'])=={1.0,2.0}
 
 def test_explicit_left_only(tmp_path):

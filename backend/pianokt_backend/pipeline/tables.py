@@ -92,7 +92,14 @@ _ALIGNMENT_EVENT_STRING_FIELDS = _strings(
     'alignment_type',
     'ref_id',
     'performance_id',
+    # UTC remains the canonical instant. The paired Japan fields are stable
+    # operational/display dimensions and never depend on a query session's TZ.
+    'attempt_created_at',
+    'attempt_created_at_jst',
+    'attempt_date_jst',
     'alignment_completed_at',
+    'alignment_completed_at_jst',
+    'alignment_completed_date_jst',
     'alignment_quality_reason',
 )
 _ALIGNMENT_EVENT_FLOAT_FIELDS = _floats(
@@ -142,16 +149,14 @@ GOLD_ALIGNMENT_EVENT_SCHEMA = pa.schema(
 # code should use the explicit Silver/Gold schemas above.
 NOTE_SCHEMA = SILVER_ALIGNMENT_EVENT_SCHEMA
 
-HAND_SCHEMA = pa.schema(
-    _strings('event_id', 'alignment_run_id', 'attempt_id', 'learner_key', 'song_id', 'hand')
-    + [
-        ('reject_reason', pa.int32()),
-        ('timing_offset', pa.float64()),
-        ('pitch_offset', pa.float64()),
-        ('duration', pa.float64()),
-        ('onset_time', pa.float64()),
-        ('pitches', pa.list_(pa.int32())),
-    ]
+ATTEMPT_EVENT_SCHEMA = pa.schema(
+    _strings('event_id', 'alignment_run_id', 'attempt_id', 'learner_key', 'song_id', 'session_id', 'score_version')
+    + [('event_index', pa.int32()), ('onset_seconds', pa.float64()),
+       ('pitches', pa.list_(pa.list_(pa.int32()))),
+       ('intervals_seconds', pa.list_(pa.float64())),
+       ('kc_vector_json', pa.string()), ('reject_reason_event', pa.int32()),
+       ('reject_reason_note_json', pa.string()), ('timing_offset_ms_json', pa.string()),
+       ('pitch_offset_semitones_json', pa.string()), ('extra_notes', pa.list_(pa.int32()))]
 )
 
 # The old serving table is intentionally retained while downstream readers are
@@ -185,7 +190,12 @@ ALIGNMENT_ATTEMPT_SCHEMA = pa.schema(
         'score_version',
         'alignment_version',
         'matcher_version',
+        'attempt_created_at',
+        'attempt_created_at_jst',
+        'attempt_date_jst',
         'alignment_completed_at',
+        'alignment_completed_at_jst',
+        'alignment_completed_date_jst',
         'alignment_quality_reason',
         'time_basis',
     )
