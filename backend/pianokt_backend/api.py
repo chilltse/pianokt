@@ -17,6 +17,7 @@ from .storage import Objects
 from .contracts import check_midi,digest
 from .inference import DemoRecommender
 from .alignment.service import align
+from .activity import Activity, save_activity
 
 app=FastAPI(title='PianoKT API',version='0.1.0')
 app.add_middleware(CORSMiddleware,allow_origins=os.getenv('FRONTEND_ORIGINS','http://localhost:5173').split(','),allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type'])
@@ -69,6 +70,7 @@ class Upload(BaseModel):
     reference_hash:str=Field(pattern=r'^[0-9a-f]{64}$')
     duration_sec:float=Field(gt=0,le=14400)
     session_id:uuid.UUID|None=None
+    activity:Activity|None=None
     settings:dict=Field(default_factory=dict)
     performance_events_hash:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
     performance_events_count:int|None=Field(default=None,ge=0,le=50000)
@@ -248,19 +250,32 @@ def commit_cycle(c,row,uid,cycle,timestamps):
         c.execute('''insert into public.play_events_raw(event_id,session_id,user_id,song_id,exercise_id,play_mode,event_type,song_time_sec,client_ts,metadata)
             values(%s,%s,%s,%s,%s,'challenge',%s,%s,%s,%s) on conflict(event_id) do nothing''',
             (event.event_id,cycle.session_id,uid,row['song_id'],f"challenge:{row['song_id']}",event.event_type,event.song_time_sec,event.client_ts,Jsonb(event.metadata)))
+    context=c.execute('select started_at from public.student_attempts where attempt_id=%s and user_id=%s',(row['id'],uid)).fetchone()
+    if context and context['started_at']!=timestamps[0]:
+        raise HTTPException(409,'Finalized cycle start differs from attempt context')
+    if context:
+        for index,event in enumerate(cycle.events):
+            saved=c.execute('select * from public.student_attempt_events where event_id=%s and attempt_id=%s',(event.event_id,row['id'])).fetchone()
+            if not saved or saved['event_sequence']!=index or saved['event_type']!=event.event_type or saved['occurred_at']!=timestamps[index] or saved['song_time_sec']!=event.song_time_sec or saved['metadata']!=event.metadata:
+                raise HTTPException(409,'Finalized cycle differs from recorded activity')
     terminal=cycle.events[-1]
     terminal_metadata=terminal.metadata
-    duration=float(row['metadata']['duration_sec'])
     time_playing=terminal_metadata.get('time_playing_sec',terminal.song_time_sec)
     if not isinstance(time_playing,(int,float)) or not 0<=time_playing<=14400:
         raise HTTPException(422,'Invalid terminal time_playing_sec')
     success=terminal_metadata.get('success') is True
     exit_status='abandoned' if terminal.event_type=='exited' else ('succeeded' if success else 'failed')
-    completed=terminal.event_type=='finished' or terminal.song_time_sec>=duration*.98
+    completed=terminal.event_type=='finished'
     c.execute('''insert into public.user_play_logs(session_id,user_id,song_id,exercise_id,play_mode,days_since_signup,time_playing,song_time_sec,challenge_recording_id,is_played_in_full,exit_status,started_at,ended_at,events_count)
-        values(%s,%s,%s,%s,'challenge',null,%s,%s,%s,%s,%s,%s,%s,%s)
+        values(%s,%s,%s,%s,'challenge',(extract(epoch from (%s::timestamptz-public.piano_registration_time(%s)))/86400.0),%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict(session_id) do update set time_playing=excluded.time_playing,song_time_sec=excluded.song_time_sec,challenge_recording_id=excluded.challenge_recording_id,is_played_in_full=excluded.is_played_in_full,exit_status=excluded.exit_status,ended_at=excluded.ended_at,events_count=excluded.events_count,updated_at=now()''',
-        (cycle.session_id,uid,row['song_id'],f"challenge:{row['song_id']}",float(time_playing),terminal.song_time_sec,row['id'],completed,exit_status,timestamps[0],timestamps[-1],len(cycle.events)))
+        (cycle.session_id,uid,row['song_id'],f"challenge:{row['song_id']}",timestamps[0],uid,float(time_playing),terminal.song_time_sec,row['id'],completed,exit_status,timestamps[0],timestamps[-1],len(cycle.events)))
+
+@app.post('/activity')
+def activity(body:Activity,uid=Depends(user)):
+    with connect() as c:
+        save_activity(c,uid,body)
+    return {'ok':True}
 
 @app.get('/health')
 def health(): return {'status':'ok'}
@@ -301,14 +316,19 @@ def create_attempt(body:Upload,uid=Depends(user)):
         if value is not None and (not finite_number(value) or not 0<=value<=maximum):
             raise HTTPException(422,f'Invalid {name}')
     with connect() as c:
+        if body.activity is not None:
+            context=body.activity.attempt
+            if context is None or context.attempt_id != body.attempt_id or context.song_id != body.song_id or context.song_source != body.song_source:
+                raise HTTPException(422,'Upload does not match activity context')
+            save_activity(c,uid,body.activity)
         c.execute('insert into public.piano_learner_keys(user_id) values(%s) on conflict do nothing',(uid,))
         learner=c.execute('select learner_key from public.piano_learner_keys where user_id=%s',(uid,)).fetchone()['learner_key']
         prefix=f'midi/{learner}/{body.attempt_id}'
         events_key=prefix+'/performance-events.json' if body.performance_events_hash else None
         c.execute('''insert into public.piano_attempts(id,user_id,learner_key,song_id,song_source,song_title,metadata,performance_key,reference_key,performance_events_key,performance_hash,reference_hash,performance_events_hash,performance_events_count)
-            values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict(id) do nothing''',(body.attempt_id,uid,learner,body.song_id,body.song_source,body.song_title,Jsonb(body.model_dump(mode='json')),prefix+'/performance.mid',prefix+'/reference.mid',events_key,body.performance_hash,body.reference_hash,body.performance_events_hash,body.performance_events_count))
+            values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict(id) do nothing''',(body.attempt_id,uid,learner,body.song_id,body.song_source,body.song_title,Jsonb(body.model_dump(mode='json',exclude={'activity'})),prefix+'/performance.mid',prefix+'/reference.mid',events_key,body.performance_hash,body.reference_hash,body.performance_events_hash,body.performance_events_count))
         row=owned_attempt(c,body.attempt_id,uid)
-        if not row or row['metadata']!=body.model_dump(mode='json'): raise HTTPException(409,'Attempt identity conflict')
+        if not row or row['metadata']!=body.model_dump(mode='json',exclude={'activity'}): raise HTTPException(409,'Attempt identity conflict')
     response=dict(attempt_id=str(body.attempt_id),performance_url=signed(row['performance_key'],'PUT'),reference_url=signed(row['reference_key'],'PUT'))
     if row['performance_events_key']:
         response['performance_events_url']=signed(row['performance_events_key'],'PUT','application/json')

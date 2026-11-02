@@ -16,7 +16,16 @@ def main():
     sub.add_parser('relay'); a=sub.add_parser('worker'); a.add_argument('attempt_id')
     sub.add_parser('spark-events')
     a=sub.add_parser('export-training'); a.add_argument('--cutoff',required=True); a.add_argument('--output-key',required=True)
+    a=sub.add_parser('export-attempts'); a.add_argument('--cutoff',required=True); a.add_argument('--output-prefix',required=True)
     args=p.parse_args()
+    if args.command=='export-attempts':
+        from .pipeline.attempts import export_attempts,read_context,utc
+        from .pipeline.tables import Tables
+        from .online import connect
+        with connect() as c:
+            c.execute('set transaction isolation level repeatable read read only')
+            context=read_context(c,utc(args.cutoff))
+        print(json.dumps(export_attempts(Objects(os.getenv('RAW_ROOT','data/raw')),Tables(os.getenv('LAKE_ROOT','data/lakehouse')),args.cutoff,args.output_prefix,context))); return
     if args.command=='export-training':
         from .pipeline.training import export_dataset
         from .pipeline.tables import Tables
