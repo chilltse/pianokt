@@ -17,6 +17,6 @@ export default [
   route('register', './register/page.tsx'),
   ...prefix('training', [
     route('phrases', './training/phrases/page.tsx'),
-    route('phrases', './training/speed/page.tsx'),
+    route('speed', './training/speed/page.tsx'),
   ]),
 ] satisfies RouteConfig

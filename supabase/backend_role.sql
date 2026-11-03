@@ -18,3 +18,15 @@ create policy backend_catalog on public.piano_song_catalog for select to pianokt
 create policy backend_preferences on public.piano_preferences for select to pianokt_backend using(true);
 -- Create a dedicated LOGIN role with a password via your secret-management workflow,
 -- then GRANT pianokt_backend TO that_login. Never grant this role to anon/authenticated.
+
+-- Migration 013 may run before this role is created on a fresh installation.
+do $$ begin
+ if to_regclass('public.student_visits') is not null then
+  grant select,insert,update on public.student_visits,public.student_attempts,public.student_attempt_events to pianokt_backend;
+  grant select on public.student_visit_status to pianokt_backend;
+  grant execute on function public.piano_registration_time(uuid) to pianokt_backend;
+  create policy backend_visits on public.student_visits to pianokt_backend using(true) with check(true);
+  create policy backend_attempt_context on public.student_attempts to pianokt_backend using(true) with check(true);
+  create policy backend_attempt_events on public.student_attempt_events to pianokt_backend using(true) with check(true);
+ end if;
+end $$;

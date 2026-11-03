@@ -44,6 +44,8 @@ def save_activity(c, uid, body):
     """Idempotent events; sequence guards against delayed heartbeats/close packets."""
     if str(body.owner_id) != str(uid):
         raise HTTPException(403, 'Activity belongs to another signed-in user')
+    if body.attempt is not None:
+        c.execute('select pg_advisory_xact_lock(hashtext(%s))',(str(body.attempt.attempt_id),))
     v = body.visit
     c.execute('insert into public.piano_learner_keys(user_id) values(%s) on conflict do nothing', (uid,))
     if body.events and body.attempt is None:
@@ -67,7 +69,11 @@ def save_activity(c, uid, body):
     expected = (str(uid), str(v.id), a.visit_attempt_sequence, a.song_id, a.song_source, a.started_at)
     if not row or (str(row['user_id']), str(row['visit_id']), row['visit_attempt_sequence'], row['song_id'], row['song_source'], row['started_at']) != expected:
         raise HTTPException(409, 'Attempt context identity conflict')
+    sealed=c.execute('select finalization from public.piano_attempts where id=%s',(a.attempt_id,)).fetchone()
+    sealed_ids={e['event_id'] for e in sealed['finalization']['cycle']['events']} if sealed and sealed.get('finalization') else None
     for e in body.events:
+        if sealed_ids is not None and str(e.event_id) not in sealed_ids:
+            raise HTTPException(409, 'Finalized activity is immutable')
         if (e.event_sequence == 0) != (e.event_type == 'play_started'):
             raise HTTPException(422, 'Sequence zero must be the unique play_started event')
         if e.event_sequence == 0 and e.occurred_at != a.started_at:

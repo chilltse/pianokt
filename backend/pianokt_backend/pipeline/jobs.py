@@ -574,6 +574,16 @@ def publish_alignment(result, tables, source_key):
         payload_json=_json(result),
     )
 
+    # A committed run is immutable across every projection, including replay.
+    # Changing a materializer requires a new lake namespace/version, not an
+    # in-place rewrite visible to readers halfway through a multi-table update.
+    for committed in tables.rows('ops/completed_runs'):
+        if committed['event_id']==run:
+            original=next((r for r in tables.rows('bronze/alignment_runs') if r['event_id']==run),None)
+            if original is None or original['payload_json']!=envelope['payload_json']:
+                raise ValueError('Committed alignment run identity conflict')
+            return
+
     # Bronze is always written first, even when the canonical result is later
     # quarantined. This is the audit/replay source of truth.
     tables.merge('bronze/alignment_runs', [envelope], ENVELOPE_SCHEMA, 'event_id')
@@ -673,10 +683,8 @@ def publish_alignment(result, tables, source_key):
         'gold/fact_alignment_attempt',
         [attempt_summary],
         ALIGNMENT_ATTEMPT_SCHEMA,
-        # This is the current canonical outcome for an attempt. Event facts
-        # remain run-versioned for audit, while a re-alignment replaces this
-        # one row's current ``alignment_run_id``.
-        'attempt_id',
+        # Keep the previous committed run visible until this run commits.
+        'alignment_run_id',
     )
     # Preserve the old serving table while readers migrate to the explicit
     # alignment-attempt fact.
@@ -684,7 +692,7 @@ def publish_alignment(result, tables, source_key):
         'gold/fact_practice_attempt',
         [attempt_summary],
         LEGACY_SUMMARY_SCHEMA,
-        'attempt_id',
+        'alignment_run_id',
     )
     # Commit manifest last; a Delta transaction is per table, not across this
     # function.
@@ -697,6 +705,9 @@ def catch_up(objects, tables, replay=False):
     count = 0
     for key in objects.keys('alignment'):
         if not key.endswith('/result.json'):
+            continue
+        # Deterministic result keys allow skipping committed objects before download.
+        if key.split('/')[-2] in completed:
             continue
         try:
             result = json.loads(objects.read(key))

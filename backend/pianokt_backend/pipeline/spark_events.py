@@ -20,7 +20,10 @@ def run(raw,lake,checkpoint):
     def upsert(df,path):
         if df.isEmpty(): return
         if DeltaTable.isDeltaTable(spark,path):
-            DeltaTable.forPath(spark,path).alias('t').merge(df.alias('s'),'t.event_id=s.event_id').whenNotMatchedInsertAll().execute()
+            table=DeltaTable.forPath(spark,path)
+            conflicts=table.toDF().alias('t').join(df.alias('s'),'event_id').filter(~F.col('t.payload_json').eqNullSafe(F.col('s.payload_json')))
+            if not conflicts.isEmpty(): raise ValueError('Immutable practice event conflict')
+            table.alias('t').merge(df.alias('s'),'t.event_id=s.event_id').whenNotMatchedInsertAll().execute()
         else: df.write.format('delta').save(path)
     def process(batch,batch_id):
         batch=batch.dropDuplicates(['event_id']).persist()
@@ -29,7 +32,13 @@ def run(raw,lake,checkpoint):
             parsed=batch.withColumn('parsed',F.from_json('payload_json',schema))
             valid=F.col('parsed.event_id').isNotNull() & F.col('parsed.event_type').isNotNull() & (F.length('parsed.event_id')>0) & (F.length('parsed.event_type')>0)
             upsert(parsed.filter(~valid).drop('parsed'),lake+'/quality/practice_events')
-            upsert(parsed.filter(valid).select(F.col('parsed.event_id').alias('event_id'),'payload_json').dropDuplicates(['event_id']),lake+'/silver/practice_events')
+            accepted=parsed.filter(valid).select(F.col('parsed.event_id').alias('event_id'),'payload_json')
+            if not accepted.groupBy('event_id').agg(F.countDistinct('payload_json').alias('versions')).filter('versions > 1').isEmpty():
+                raise ValueError('Conflicting event IDs in one batch')
+            accepted=accepted.dropDuplicates(['event_id'])
+            upsert(accepted,lake+'/silver/practice_events')
+            # One final Delta transaction publishes this batch's accepted events.
+            upsert(accepted,lake+'/ops/practice_event_commits')
         finally: batch.unpersist()
     try:
         stream.writeStream.foreachBatch(process).option('checkpointLocation',checkpoint+'/practice-events-v1').trigger(availableNow=True).start().awaitTermination()

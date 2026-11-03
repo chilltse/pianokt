@@ -1,11 +1,11 @@
+import { supabase } from '@/features/auth/supabase'
 import {
   fetchLeaderboard,
   type LeaderboardEntry,
   type LeaderboardSortBy,
 } from '@/features/challenge-history'
-import { supabase } from '@/features/auth/supabase'
-import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
+import { useEffect, useRef, useState } from 'react'
 
 const SORT_OPTIONS: { value: LeaderboardSortBy; label: string }[] = [
   { value: 'challenges', label: 'Challenges' },
@@ -18,7 +18,7 @@ function formatValue(sortBy: LeaderboardSortBy, entry: LeaderboardEntry): string
     case 'challenges':
       return String(entry.challenge_count)
     case 'accuracy':
-      return `${Number(entry.accuracy_avg).toFixed(1)}%`
+      return entry.accuracy_avg == null ? '—' : `${Number(entry.accuracy_avg).toFixed(1)}%`
     case 'difficulty':
       return Number(entry.max_difficulty).toFixed(1)
     default:
@@ -61,16 +61,10 @@ export function Leaderboard() {
     if (!supabase) return
     const channel = supabase
       .channel('leaderboard-sync')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'challenge_recordings' },
-        () => refetch(),
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'challenge_recordings' }, () =>
+        refetch(),
       )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'profiles' },
-        () => refetch(),
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => refetch())
       .subscribe()
     return () => {
       supabase?.removeChannel(channel)
@@ -125,9 +119,7 @@ export function Leaderboard() {
                     <span
                       className={clsx(
                         'w-8 shrink-0 text-right text-sm tabular-nums',
-                        entry.rank <= 3
-                          ? 'font-bold text-amber-600'
-                          : 'font-medium text-gray-400',
+                        entry.rank <= 3 ? 'font-bold text-amber-600' : 'font-medium text-gray-400',
                       )}
                     >
                       #{entry.rank}
@@ -159,7 +151,7 @@ export function Leaderboard() {
                     <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-900">
                       {entry.display_name || 'Player'}
                     </span>
-                    <span className="shrink-0 text-sm tabular-nums text-gray-600">
+                    <span className="shrink-0 text-sm text-gray-600 tabular-nums">
                       {formatValue(sortBy, entry)}
                     </span>
                   </li>
@@ -170,7 +162,7 @@ export function Leaderboard() {
                   <button
                     type="button"
                     onClick={() => setShowMore(false)}
-                    className="cursor-pointer text-sm font-medium text-amber-700 hover:text-amber-800 transition-colors"
+                    className="cursor-pointer text-sm font-medium text-amber-700 transition-colors hover:text-amber-800"
                   >
                     Show less
                   </button>
@@ -179,7 +171,7 @@ export function Leaderboard() {
                     <button
                       type="button"
                       onClick={() => setShowMore(true)}
-                      className="cursor-pointer text-sm font-medium text-amber-700 hover:text-amber-800 transition-colors"
+                      className="cursor-pointer text-sm font-medium text-amber-700 transition-colors hover:text-amber-800"
                     >
                       Show more
                     </button>

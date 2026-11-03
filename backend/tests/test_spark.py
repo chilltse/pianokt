@@ -16,3 +16,11 @@ def test_checkpoint_and_quarantine(tmp_path):
     (events/'002.jsonl').write_text(json.dumps(dict(event_id='e2',event_type='practice.event'))+'\n')
     run(str(raw),lake,checkpoint)
     assert DeltaTable(lake+'/silver/practice_events').to_pyarrow_table().num_rows==2
+    from pianokt_backend.pipeline.tables import Tables
+    assert len(Tables(lake).rows('silver/practice_events'))==2
+    assert DeltaTable(lake+'/ops/practice_event_commits').to_pyarrow_table().num_rows==2
+    (events/'003.jsonl').write_text(json.dumps(dict(event_id='e1',event_type='changed'))+'\n'+json.dumps(dict(event_id='e3',event_type='practice.event'))+'\n')
+    with pytest.raises(Exception,match='Immutable practice event conflict'):
+        run(str(raw),lake,checkpoint)
+    assert len(Tables(lake).rows('silver/practice_events'))==2
+    assert DeltaTable(lake+'/ops/practice_event_commits').to_pyarrow_table().num_rows==2

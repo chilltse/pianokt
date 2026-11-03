@@ -84,3 +84,29 @@ def test_training_cutoff_and_mask(tmp_path):
     assert len(data['examples'])==3
     export_dataset(store,tables,'2025-02-01T00:00:00Z','datasets/empty.json')
     assert json.loads(store.read('datasets/empty.json'))['examples']==[]
+
+
+def test_lake_partial_run_stays_invisible_and_recovers(tmp_path):
+    from pianokt_backend.pipeline.jobs import publish_alignment
+    ref=tmp_path/'ref.mid'; perf=tmp_path/'perf.mid'
+    midi(ref); midi(perf)
+    result=align(ref,perf,'attempt')
+    result.update(learner_key='learner',song_id='song')
+    tables=Tables(str(tmp_path/'lake'))
+    merge=tables.merge
+    def fail(name,*args):
+        if name=='ops/completed_runs': raise OSError('injected failure before commit')
+        return merge(name,*args)
+    tables.merge=fail
+    with pytest.raises(OSError): publish_alignment(result,tables,'alignment/result.json')
+    assert tables.rows('gold/fact_midi_alignment')==[]
+    assert tables.rows('silver/midi_alignment_events')==[]
+    tables.merge=merge
+    publish_alignment(result,tables,'alignment/result.json')
+    assert len(tables.rows('gold/fact_midi_alignment'))==12
+    snapshot=tables.snapshot(['gold/fact_midi_alignment','gold/fact_alignment_attempt'])
+    assert len(snapshot['gold/fact_alignment_attempt'])==1
+    # Same identity with changed payload cannot mutate a published snapshot.
+    result['song_id']='different'
+    with pytest.raises(ValueError,match='identity conflict'): publish_alignment(result,tables,'alignment/result.json')
+    assert tables.snapshot(list(snapshot))==snapshot

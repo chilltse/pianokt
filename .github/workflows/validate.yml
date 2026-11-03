@@ -18,7 +18,46 @@ jobs:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun run test
+      - run: bun test src/features/parsers/parse-midi.test.ts src/features/challenge-history/referenceSnapshot.test.ts src/pages/play/components/TimelineStrip.utils.test.ts
+      - run: bun run test:activity
+      - run: bun run test:uploads
       - run: bun run check-fmt
       - run: bun run check-types
       - run: bun run build
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pip install -r backend/requirements.lock
+      - run: pip install --no-deps -e backend
+      - run: pip install 'pytest>=8,<10'
+      - run: npm install --prefix /tmp/pianokt-test-db --no-audit --no-fund @electric-sql/pglite@0.3.14
+      - run: python -m pytest backend/tests -q
+        env:
+          PGLITE_MODULE: /tmp/pianokt-test-db/node_modules/@electric-sql/pglite/dist/index.js
+
+  spark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: pip install -r backend/requirements.lock
+      - run: pip install -e 'backend[spark]'
+      - run: python -m pytest backend/tests/test_spark.py -q
+        env:
+          PIANOKT_TEST_SPARK: '1'
+          SPARK_LOCAL_IP: 127.0.0.1
+          PYSPARK_SUBMIT_ARGS: '--master local[2] pyspark-shell'

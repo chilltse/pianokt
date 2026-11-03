@@ -96,3 +96,17 @@ def test_alignment_window_settings_rejects_an_end_before_origin():
             'observed_range':{'start':10.0,'end':5.0},
             'reference_time_origin_sec':10.0,
         })
+
+
+def test_cycle_timezone_and_pause_state():
+    from pianokt_backend.upload_contracts import ChallengeCycle,validate_cycle
+    from pydantic import ValidationError
+    from uuid import uuid4
+    sid=str(uuid4())
+    def event(kind,time):
+        return dict(event_id=str(uuid4()),event_type=kind,song_time_sec=0,client_ts=time)
+    events=[event('play_started','2026-01-01T00:00:00Z'),event('resumed','2026-01-01T00:00:01Z'),event('exited','2026-01-01T00:00:02Z')]
+    cycle=ChallengeCycle(session_id=sid,events=events)
+    with pytest.raises(HTTPException,match='Resume requires'): validate_cycle({'metadata':{'session_id':sid}},cycle)
+    events[0]['client_ts']='2026-01-01T00:00:00'
+    with pytest.raises(ValidationError): ChallengeCycle(session_id=sid,events=events)

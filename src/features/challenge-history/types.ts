@@ -8,6 +8,8 @@ export type ChallengeRecordingRow = {
   midi_storage_path: string
   created_at: string
   accuracy_pct?: number
+  client_accuracy_pct?: number | null
+  score_source?: 'legacy' | 'pending' | 'aligned' | 'rejected'
   difficulty?: number
   midi_keyboard_used?: boolean
 }
@@ -18,7 +20,7 @@ export type LeaderboardEntry = {
   display_name: string | null
   avatar_url: string | null
   challenge_count: number
-  accuracy_avg: number
+  accuracy_avg: number | null
   max_difficulty: number
 }
 
@@ -35,13 +37,7 @@ export type ChallengeRecording = {
 
 export type PlayMode = 'challenge' | 'freeplay' | 'training'
 
-export type PlayEventType =
-  | 'play_started'
-  | 'paused'
-  | 'resumed'
-  | 'finished'
-  | 'exited'
-  | 'failed'
+export type PlayEventType = 'play_started' | 'paused' | 'resumed' | 'finished' | 'exited' | 'failed'
 
 export type PlayExitStatus = 'succeeded' | 'abandoned' | 'failed' | 'unknown'
 

@@ -17,7 +17,9 @@ from .storage import Objects
 from .contracts import check_midi,digest
 from .inference import DemoRecommender
 from .alignment.service import align
+from .upload_service import commit_finalization
 from .activity import Activity, save_activity
+from .upload_contracts import (Upload, Finalize, ChallengeCycle, CycleEvent, LocalAlignment, finite_number, local_alignment_lab_enabled, validate_alignment_window_settings, validate_performance_events, validate_cycle, commit_cycle)
 
 app=FastAPI(title='PianoKT API',version='0.1.0')
 app.add_middleware(CORSMiddleware,allow_origins=os.getenv('FRONTEND_ORIGINS','http://localhost:5173').split(','),allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type'])
@@ -61,216 +63,6 @@ def signed(key,method,content_type='audio/midi'):
         kwargs.update(service_account_email=os.environ['SIGNING_SERVICE_ACCOUNT'],access_token=credentials.token)
     return store.bucket.blob(store._name(key)).generate_signed_url(**kwargs)
 
-class Upload(BaseModel):
-    attempt_id:uuid.UUID
-    song_id:str=Field(min_length=1,max_length=300)
-    song_source:str=Field(max_length=50)
-    song_title:str|None=Field(default=None,max_length=300)
-    performance_hash:str=Field(pattern=r'^[0-9a-f]{64}$')
-    reference_hash:str=Field(pattern=r'^[0-9a-f]{64}$')
-    duration_sec:float=Field(gt=0,le=14400)
-    session_id:uuid.UUID|None=None
-    activity:Activity|None=None
-    settings:dict=Field(default_factory=dict)
-    performance_events_hash:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
-    performance_events_count:int|None=Field(default=None,ge=0,le=50000)
-
-class CycleEvent(BaseModel):
-    event_id:uuid.UUID
-    event_type:str=Field(pattern='^(play_started|paused|resumed|finished|exited)$')
-    song_time_sec:float=Field(ge=0,le=14400)
-    client_ts:datetime
-    metadata:dict=Field(default_factory=dict)
-
-class ChallengeCycle(BaseModel):
-    session_id:uuid.UUID
-    events:list[CycleEvent]=Field(min_length=2,max_length=1000)
-
-class Finalize(BaseModel):
-    cycle:ChallengeCycle
-
-class LocalAlignment(BaseModel):
-    performance_midi_base64:str=Field(min_length=1,max_length=12_000_000)
-    reference_midi_base64:str=Field(min_length=1,max_length=12_000_000)
-    performance_events:dict|None=None
-    observed_end_sec:float=Field(ge=0,le=14400)
-    reference_origin_sec:float=Field(ge=0,le=14400)
-
-def finite_number(value):
-    return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value)
-
-def local_alignment_lab_enabled():
-    """Strictly local preflight: never enabled in Cloud Run or by default."""
-    return os.getenv('PIANOKT_ENV')=='development' and os.getenv('PIANOKT_LOCAL_ALIGNMENT_LAB')=='1' and not os.getenv('K_SERVICE')
-
-def validate_alignment_window_settings(settings):
-    """Reject contradictory snapshot-window metadata before creating an attempt.
-
-    The reference MIDI is cropped into this window, so silently accepting an
-    end before its origin would make a malformed attempt look like an empty
-    (and potentially valid) score. Older clients may omit these optional
-    fields; once present they must form a coherent window.
-    """
-    def range_value(name):
-        value=settings.get(name)
-        if value is None:
-            return None
-        if not isinstance(value,dict):
-            raise HTTPException(422,f'Invalid {name}')
-        start=value.get('start')
-        end=value.get('end')
-        if not finite_number(start) or not finite_number(end) or start<0 or end<start:
-            raise HTTPException(422,f'Invalid {name}')
-        return float(start),float(end)
-
-    compatibility_range=range_value('range')
-    observed_range=range_value('observed_range')
-    assigned_range=range_value('assigned_range')
-    observed=observed_range or compatibility_range
-    origin_value=settings.get('reference_time_origin_sec')
-    if origin_value is not None and (not finite_number(origin_value) or origin_value<0):
-        raise HTTPException(422,'Invalid reference_time_origin_sec')
-    origin=float(origin_value) if origin_value is not None else (observed[0] if observed else None)
-    if observed and origin is not None and abs(observed[0]-origin)>1e-6:
-        raise HTTPException(422,'Reference origin does not match observed range')
-    if observed and assigned_range and (
-        observed[0] < assigned_range[0] or observed[1] > assigned_range[1]
-    ):
-        raise HTTPException(422,'Observed range is outside assigned range')
-    played_until=settings.get('played_until_sec')
-    if played_until is not None:
-        if not finite_number(played_until) or played_until<0 or played_until>14400:
-            raise HTTPException(422,'Invalid played_until_sec')
-        if origin is not None and played_until < origin:
-            raise HTTPException(422,'Played-until time precedes reference origin')
-
-def validate_performance_events(data,expected_count):
-    """Validate the immutable browser telemetry sidecar before it becomes visible.
-
-    These events are evidence, so validation deliberately checks shape and bounds
-    without rewriting event order or trying to "fix" a client clock anomaly.
-    """
-    if not isinstance(data,dict) or data.get('schemaVersion')!=1:
-        raise HTTPException(422,'Invalid performance event telemetry')
-    events=data.get('events')
-    segments=data.get('transportSegments')
-    if not isinstance(events,list) or not isinstance(segments,list):
-        raise HTTPException(422,'Invalid performance event telemetry')
-    if len(events)>50000 or len(segments)>1000 or len(events)!=expected_count:
-        raise HTTPException(422,'Invalid performance event telemetry count')
-    previous_sequence=-1
-    for event in events:
-        if not isinstance(event,dict): raise HTTPException(422,'Invalid performance event')
-        sequence=event.get('sequence')
-        if not isinstance(sequence,int) or isinstance(sequence,bool) or sequence<=previous_sequence:
-            raise HTTPException(422,'Performance event sequence is not increasing')
-        previous_sequence=sequence
-        if event.get('type') not in ('note_on','note_off'):
-            raise HTTPException(422,'Invalid performance event type')
-        for key in ('midiEventTimestamp','playerSongTime','performanceNowTimestamp'):
-            if not finite_number(event.get(key)) or event[key]<0 or event[key]>86_400_000:
-                raise HTTPException(422,f'Invalid performance event {key}')
-        if not isinstance(event.get('pitch'),int) or isinstance(event['pitch'],bool) or not 0<=event['pitch']<=127:
-            raise HTTPException(422,'Invalid performance event pitch')
-        if not finite_number(event.get('velocity')) or not 0<=event['velocity']<=127:
-            raise HTTPException(422,'Invalid performance event velocity')
-        if event.get('timestampSource') not in ('web_midi','browser_keyboard'):
-            raise HTTPException(422,'Invalid performance event timestamp source')
-    previous_segment=-1
-    previous_segment_song_time=None
-    previous_segment_now=None
-    transport_state='before_start'
-    for segment in segments:
-        if not isinstance(segment,dict): raise HTTPException(422,'Invalid transport segment')
-        sequence=segment.get('sequence')
-        if not isinstance(sequence,int) or isinstance(sequence,bool) or sequence<=previous_segment:
-            raise HTTPException(422,'Transport segment sequence is not increasing')
-        previous_segment=sequence
-        if segment.get('type') not in ('start','resume','pause','stop'):
-            raise HTTPException(422,'Invalid transport segment type')
-        for key in ('playerSongTime','performanceNowTimestamp'):
-            if not finite_number(segment.get(key)) or segment[key]<0 or segment[key]>86_400_000:
-                raise HTTPException(422,f'Invalid transport segment {key}')
-        if (
-            previous_segment_song_time is not None
-            and segment['playerSongTime'] < previous_segment_song_time
-        ):
-            raise HTTPException(422,'Transport segment song time is not monotonic')
-        if (
-            previous_segment_now is not None
-            and segment['performanceNowTimestamp'] < previous_segment_now
-        ):
-            raise HTTPException(422,'Transport segment browser time is not monotonic')
-        segment_type=segment['type']
-        if segment_type=='start':
-            if transport_state!='before_start':
-                raise HTTPException(422,'Transport cycle has an invalid start')
-            transport_state='active'
-        elif segment_type=='pause':
-            if transport_state!='active':
-                raise HTTPException(422,'Transport cycle has an invalid pause')
-            transport_state='paused'
-        elif segment_type=='resume':
-            if transport_state!='paused':
-                raise HTTPException(422,'Transport cycle has an invalid resume')
-            transport_state='active'
-        else:  # stop
-            if transport_state not in ('active','paused'):
-                raise HTTPException(422,'Transport cycle has an invalid stop')
-            transport_state='stopped'
-        previous_segment_song_time=segment['playerSongTime']
-        previous_segment_now=segment['performanceNowTimestamp']
-    if transport_state!='stopped':
-        raise HTTPException(422,'Transport cycle must start and end with stop')
-    return data
-
-def validate_cycle(row,cycle):
-    session_id=row['metadata'].get('session_id')
-    if not session_id or str(cycle.session_id)!=str(session_id):
-        raise HTTPException(409,'Session does not match attempt')
-    event_types=[event.event_type for event in cycle.events]
-    if event_types[0]!='play_started' or event_types[-1] not in ('finished','exited'):
-        raise HTTPException(422,'Cycle must start with play_started and end with finished or exited')
-    if any(event_type in ('play_started','finished','exited') for event_type in event_types[1:-1]):
-        raise HTTPException(422,'Cycle contains an invalid terminal or duplicate start event')
-    if len({event.event_id for event in cycle.events})!=len(cycle.events):
-        raise HTTPException(422,'Cycle event IDs must be unique')
-    timestamps=[]
-    for event in cycle.events:
-        timestamp=event.client_ts
-        if timestamp.tzinfo is None: timestamp=timestamp.replace(tzinfo=timezone.utc)
-        timestamps.append(timestamp)
-        if len(json.dumps(event.metadata))>16000: raise HTTPException(422,'Event metadata too large')
-    if timestamps!=sorted(timestamps): raise HTTPException(422,'Cycle events are not chronological')
-    return timestamps
-
-def commit_cycle(c,row,uid,cycle,timestamps):
-    """Write the user-visible challenge cycle inside the finalize transaction."""
-    for event in cycle.events:
-        c.execute('''insert into public.play_events_raw(event_id,session_id,user_id,song_id,exercise_id,play_mode,event_type,song_time_sec,client_ts,metadata)
-            values(%s,%s,%s,%s,%s,'challenge',%s,%s,%s,%s) on conflict(event_id) do nothing''',
-            (event.event_id,cycle.session_id,uid,row['song_id'],f"challenge:{row['song_id']}",event.event_type,event.song_time_sec,event.client_ts,Jsonb(event.metadata)))
-    context=c.execute('select started_at from public.student_attempts where attempt_id=%s and user_id=%s',(row['id'],uid)).fetchone()
-    if context and context['started_at']!=timestamps[0]:
-        raise HTTPException(409,'Finalized cycle start differs from attempt context')
-    if context:
-        for index,event in enumerate(cycle.events):
-            saved=c.execute('select * from public.student_attempt_events where event_id=%s and attempt_id=%s',(event.event_id,row['id'])).fetchone()
-            if not saved or saved['event_sequence']!=index or saved['event_type']!=event.event_type or saved['occurred_at']!=timestamps[index] or saved['song_time_sec']!=event.song_time_sec or saved['metadata']!=event.metadata:
-                raise HTTPException(409,'Finalized cycle differs from recorded activity')
-    terminal=cycle.events[-1]
-    terminal_metadata=terminal.metadata
-    time_playing=terminal_metadata.get('time_playing_sec',terminal.song_time_sec)
-    if not isinstance(time_playing,(int,float)) or not 0<=time_playing<=14400:
-        raise HTTPException(422,'Invalid terminal time_playing_sec')
-    success=terminal_metadata.get('success') is True
-    exit_status='abandoned' if terminal.event_type=='exited' else ('succeeded' if success else 'failed')
-    completed=terminal.event_type=='finished'
-    c.execute('''insert into public.user_play_logs(session_id,user_id,song_id,exercise_id,play_mode,days_since_signup,time_playing,song_time_sec,challenge_recording_id,is_played_in_full,exit_status,started_at,ended_at,events_count)
-        values(%s,%s,%s,%s,'challenge',(extract(epoch from (%s::timestamptz-public.piano_registration_time(%s)))/86400.0),%s,%s,%s,%s,%s,%s,%s,%s)
-        on conflict(session_id) do update set time_playing=excluded.time_playing,song_time_sec=excluded.song_time_sec,challenge_recording_id=excluded.challenge_recording_id,is_played_in_full=excluded.is_played_in_full,exit_status=excluded.exit_status,ended_at=excluded.ended_at,events_count=excluded.events_count,updated_at=now()''',
-        (cycle.session_id,uid,row['song_id'],f"challenge:{row['song_id']}",timestamps[0],uid,float(time_playing),terminal.song_time_sec,row['id'],completed,exit_status,timestamps[0],timestamps[-1],len(cycle.events)))
-
 @app.post('/activity')
 def activity(body:Activity,uid=Depends(user)):
     with connect() as c:
@@ -302,7 +94,7 @@ def local_align(body:LocalAlignment):
         output_dir=Path(os.getenv('PIANOKT_LOCAL_ALIGNMENT_OUTPUT_DIR','data/local-alignment')).expanduser().resolve()
         output_dir.mkdir(parents=True,exist_ok=True)
         output_path=output_dir/f"{result['alignment_run_id']}.json"
-        output_path.write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+        Objects(str(output_dir)).json(output_path.name,result)
         return {**result,'local_output_path':str(output_path)}
 
 @app.post('/attempts')
@@ -361,15 +153,7 @@ def finalize(attempt_id:uuid.UUID,body:Finalize,uid=Depends(user)):
         except json.JSONDecodeError as exc: raise HTTPException(422,'Invalid performance event telemetry JSON') from exc
     timestamps=validate_cycle(row,body.cycle)
     with connect() as c:
-        locked=c.execute('select * from public.piano_attempts where id=%s and user_id=%s for update',(attempt_id,uid)).fetchone()
-        if locked['status']=='CREATED':
-            c.execute("update public.piano_attempts set status='UPLOADED',updated_at=now() where id=%s",(attempt_id,))
-            payload=dict(event_type='performance.uploaded',attempt_id=str(attempt_id),learner_key=str(row['learner_key']))
-            c.execute('insert into public.piano_outbox(event_type,aggregate_id,payload) values(%s,%s,%s) on conflict do nothing',('performance.uploaded',str(attempt_id),Jsonb(payload)))
-            meta=row['metadata']; settings=meta.get('settings',{})
-            c.execute('''insert into public.challenge_recordings(id,user_id,song_source,song_id,song_title,duration_sec,midi_storage_path,midi_keyboard_used,accuracy_pct,difficulty)
-                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict(id) do nothing''',(attempt_id,uid,row['song_source'],row['song_id'],row['song_title'],meta['duration_sec'],f'gcs:{attempt_id}',bool(settings.get('midi_keyboard_used',False)),settings.get('client_accuracy_pct') or 0,settings.get('client_difficulty') or 0))
-            commit_cycle(c,row,uid,body.cycle,timestamps)
+        commit_finalization(c,row,uid,body,timestamps)
     return {'id':str(attempt_id)}
 
 @app.get('/attempts/{attempt_id}')
@@ -391,7 +175,7 @@ def download(attempt_id:uuid.UUID,kind:str='performance',uid=Depends(user)):
 def recommendations(uid=Depends(user)):
     model=DemoRecommender()
     with connect() as c:
-        history=c.execute("select id,summary,alignment_run_id,result_key from public.piano_attempts where user_id=%s and status='READY' order by created_at desc limit 3",(uid,)).fetchall()[::-1]
+        history=c.execute("select p.id,p.summary,p.alignment_run_id,p.result_key from public.piano_attempts p left join public.student_attempts a on a.attempt_id=p.id where p.user_id=%s and p.status='READY' and p.summary->>'alignment_quality_valid'='true' order by coalesce(a.started_at,p.created_at) desc,p.id desc limit 3",(uid,)).fetchall()[::-1]
         pref=c.execute('select genres from public.piano_preferences where user_id=%s',(uid,)).fetchone()
         catalog=c.execute('select song_id,title,difficulty,genres from public.piano_song_catalog where enabled').fetchall()
     for attempt in history:
@@ -414,6 +198,10 @@ def feedback(body:Feedback,uid=Depends(user)):
         row=c.execute('select response from public.piano_recommendations where id=%s and user_id=%s',(body.recommendation_id,uid)).fetchone()
         if not row or body.song_id not in {s['song_id'] for s in row['response']['items']}: raise HTTPException(404,'Unknown recommendation')
         inserted=c.execute('insert into public.piano_recommendation_feedback(event_id,recommendation_id,user_id,song_id,event_type) values(%s,%s,%s,%s,%s) on conflict do nothing returning event_id',(body.event_id,body.recommendation_id,uid,body.song_id,body.event_type)).fetchone()
+        if not inserted:
+            existing=c.execute('select * from public.piano_recommendation_feedback where event_id=%s',(body.event_id,)).fetchone()
+            if not existing or str(existing['user_id'])!=str(uid) or str(existing['recommendation_id'])!=str(body.recommendation_id) or existing['song_id']!=body.song_id or existing['event_type']!=body.event_type:
+                raise HTTPException(409,'Feedback event identity conflict')
         if inserted:
             c.execute('insert into public.piano_learner_keys(user_id) values(%s) on conflict do nothing',(uid,))
             learner=c.execute('select learner_key from public.piano_learner_keys where user_id=%s',(uid,)).fetchone()['learner_key']

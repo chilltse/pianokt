@@ -1,40 +1,33 @@
 import json
-from datetime import datetime
+from .selection import utc, eligible_results, rejection, select_one, attempt_order_key
 from ..contracts import stable_id
 
-def export_dataset(objects,tables,cutoff,output_key):
-    boundary=datetime.fromisoformat(cutoff.replace('Z','+00:00'))
-    if boundary.tzinfo is None: raise ValueError('Cutoff needs timezone')
-    examples=[]
-    completed={row['event_id'] for row in tables.rows('ops/completed_runs')}
-    for key in objects.keys('alignment'):
-        if not key.endswith('/result.json'): continue
-        r=json.loads(objects.read(key))
-        if r['alignment_run_id'] not in completed: continue
-        diagnostics=r.get('diagnostics',{})
-        summary=r.get('summary',{})
-        # Pre-quality-gate results are replay artifacts, not automatically
-        # trustworthy labels. A historical run can be explicitly re-aligned
-        # with the current matcher if it should contribute to training.
-        quality=r.get('alignment_quality_valid',diagnostics.get('alignment_quality_valid',summary.get('alignment_quality_valid',False)))
-        # A terminal quality rejection is intentionally committed so the raw
-        # result can be audited, but it must never become a training example.
-        if quality is not True: continue
-        if not r.get('alignment_completed_at') or datetime.fromisoformat(r['alignment_completed_at'])>=boundary: continue
-        if not r.get('attempt_created_at') or datetime.fromisoformat(r['attempt_created_at'])>=boundary: continue
-        settings=r.get('practice_metadata',{}).get('settings',{})
-        if settings.get('waiting'): continue
+def export_dataset(objects,tables,cutoff,output_key, context=None, run_selection=None):
+    boundary=utc(cutoff)
+    examples=[]; selected={}
+    by_id={str(a['attempt_id']):a for a in context['attempts']} if context is not None else {}
+    for r in eligible_results(objects,tables,cutoff,run_selection):
+        if rejection(r): continue
+        a=by_id.get(r['attempt_id'])
+        if context is not None:
+            if a is None or utc(a['started_at'])>=boundary or utc(a.get('received_at',a['started_at']))>=boundary: continue
+            if not a.get('ended_at') or utc(a['ended_at'])>=boundary: continue
+            if str(a['learner_key'])!=str(r['learner_key']): raise ValueError('Learner context mismatch')
+        started=(a or {}).get('started_at') or r.get('attempt_started_at') or r.get('attempt_created_at')
+        if not started or utc(started)>=boundary: continue
+        select_one(selected,r)
         data=r.get('events_data',{})
         onsets=data.get('onset_seconds',[])
         labels=(data.get('reject_reason') or {}).get('event',[])
         if not isinstance(onsets,list) or not isinstance(labels,list) or len(onsets)!=len(labels):
             raise ValueError('Invalid v1.1 attempt events')
         for i,(onset,reason) in enumerate(zip(onsets,labels)):
-            examples.append(dict(learner_key=r['learner_key'],attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],event_index=i,onset_seconds=onset,pitches=data['pitches'][i],kc_vector=data['kc_vectors'][i],correct=1-int(reason),reject_reason=reason,attempt_created_at=r['attempt_created_at']))
-    examples.sort(key=lambda e:(e['learner_key'],e['attempt_created_at'],e['attempt_id'],e['onset_seconds'],e['event_index']))
-    versions={}
-    for e in examples: versions.setdefault(e['attempt_id'],set()).add(e['alignment_run_id'])
-    if any(len(v)>1 for v in versions.values()): raise ValueError('Select one alignment version per attempt before training')
-    payload=dict(dataset_version=stable_id(cutoff,examples),cutoff=cutoff,examples=examples,warning='Split students/time before windowing. No trained model is included.')
+            examples.append(dict(learner_key=r['learner_key'],attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],event_index=i,onset_seconds=onset,pitches=data['pitches'][i],kc_vector=data['kc_vectors'][i],correct=1-int(reason),reject_reason=reason,ordering_timestamp=utc(started).isoformat(),ordering_source='started_at' if a or r.get('attempt_started_at') else 'legacy_upload_time'))
+    examples.sort(key=lambda e: (attempt_order_key(by_id[e['attempt_id']]) if e['attempt_id'] in by_id else (str(e['learner_key']),utc(e['ordering_timestamp']),'',0,e['attempt_id']))+(e['onset_seconds'],e['event_index']))
+    provenance=[dict(attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],
+                     matcher_version=r.get('matcher_version'),result_digest=r.get('_committed_digest'))
+                for r in sorted(selected.values(),key=lambda r:r['attempt_id'])]
+    payload=dict(source='postgres-ready-v1' if hasattr(tables,'results') else 'lake-completed-v1',
+                 feature_version='v1.1',quality_policy='quality-valid-and-not-waiting',runs=provenance,dataset_version=stable_id(cutoff,examples,provenance),cutoff=utc(cutoff).isoformat(),examples=examples,warning='Split students/time before windowing. No trained model is included.')
     objects.json(output_key,payload)
     return payload['dataset_version']

@@ -11,12 +11,20 @@ variable "region" { type = string }
 variable "image" { type = string }
 variable "spark_image" { type = string }
 variable "frontend_origin" { type = string }
+variable "local_development_origins" {
+  description = "Loopback browser origins allowed to call the public API and use signed raw-bucket uploads during local development."
+  type        = list(string)
+  default     = ["http://localhost:5173", "http://127.0.0.1:5173"]
+}
 variable "supabase_url" { type = string }
 variable "supabase_anon_key" { type = string }
 variable "database_secret_id" { type = string }
 variable "schedules_paused" {
   type    = bool
   default = true
+}
+locals {
+  browser_origins = distinct(concat([var.frontend_origin], var.local_development_origins))
 }
 provider "google" {
   project = var.project_id
@@ -51,7 +59,7 @@ resource "google_storage_bucket" "data" {
   dynamic "cors" {
     for_each = each.key == "raw" ? [1] : []
     content {
-      origin          = [var.frontend_origin]
+      origin          = local.browser_origins
       method          = ["PUT", "GET", "HEAD"]
       response_header = ["Content-Type", "ETag", "x-goog-generation", "x-goog-if-generation-match"]
       max_age_seconds = 3600
@@ -158,7 +166,7 @@ resource "google_cloud_run_v2_service" "app" {
         }
       }
       dynamic "env" {
-        for_each = { RAW_ROOT = "gs://${google_storage_bucket.data["raw"].name}", SUPABASE_URL = var.supabase_url, SUPABASE_ANON_KEY = var.supabase_anon_key, FRONTEND_ORIGINS = var.frontend_origin, SIGNING_SERVICE_ACCOUNT = google_service_account.runtime["api"].email }
+        for_each = { RAW_ROOT = "gs://${google_storage_bucket.data["raw"].name}", SUPABASE_URL = var.supabase_url, SUPABASE_ANON_KEY = var.supabase_anon_key, FRONTEND_ORIGINS = join(",", local.browser_origins), SIGNING_SERVICE_ACCOUNT = google_service_account.runtime["api"].email }
         content {
           name  = env.key
           value = env.value
@@ -262,7 +270,7 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler" {
 resource "google_cloud_scheduler_job" "job" {
   for_each  = google_cloud_run_v2_job.job
   name      = "pianokt-${each.key}"
-  schedule  = each.key == "relay" ? "0 10,23 * * *" : "0 0,11 * * *"
+  schedule  = each.key == "relay" ? var.relay_schedule : var.pipeline_schedule
   time_zone = "Asia/Tokyo"
   paused    = var.schedules_paused
   http_target {
@@ -273,3 +281,14 @@ resource "google_cloud_scheduler_job" "job" {
   depends_on = [google_project_service.enabled]
 }
 output "api_url" { value = google_cloud_run_v2_service.app["api"].uri }
+
+variable "relay_schedule" {
+  type        = string
+  default     = "0 10,23 * * *"
+  description = "Outbox relay schedule (Asia/Tokyo); use */5 * * * * for interactive processing."
+}
+variable "pipeline_schedule" {
+  type        = string
+  default     = "0 0,11 * * *"
+  description = "Lakehouse catch-up schedule (Asia/Tokyo)."
+}

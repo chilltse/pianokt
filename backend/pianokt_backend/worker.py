@@ -133,11 +133,27 @@ def _is_current_result(result,row,config,expected_run,observed_end_sec,reference
         and context.get('event_audit_supplied')==(performance_events is not None)
     )
 
+def commit_alignment(c,attempt_id,lease_token,result_key,result):
+    """Publish READY, authoritative score and outbox in the caller transaction."""
+    current=c.execute('select lease_token from public.piano_attempts where id=%s for update',(attempt_id,)).fetchone()
+    if str(current['lease_token'])!=lease_token:
+        raise RuntimeError('Worker lease superseded')
+    c.execute("update public.piano_attempts set status='READY',result_key=%s,summary=%s,alignment_run_id=%s,error_code=null,lease_until=null,updated_at=now() where id=%s",(result_key,Jsonb(result['summary']),result['alignment_run_id'],attempt_id))
+    c.execute('update public.piano_attempts set result_digest=%s,result_committed_at=clock_timestamp() where id=%s',
+              (digest(json.dumps(result,sort_keys=True,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode()),attempt_id))
+    quality_valid,_=_quality(result)
+    accuracy=result['summary'].get('accuracy')
+    c.execute('update public.challenge_recordings set accuracy_pct=%s,score_source=%s where id=%s',
+              (float(accuracy)*100 if quality_valid and accuracy is not None else 0,'aligned' if quality_valid and accuracy is not None else 'rejected',attempt_id))
+    payload=dict(event_type='alignment.completed',attempt_id=attempt_id,alignment_run_id=result['alignment_run_id'],result_key=result_key)
+    c.execute('insert into public.piano_outbox(event_type,aggregate_id,payload) values(%s,%s,%s) on conflict do nothing',('alignment.completed',result['alignment_run_id'],Jsonb(payload)))
+
 def process(attempt_id):
     attempt_id=str(uuid.UUID(str(attempt_id)))
+    lease_token=str(uuid.uuid4())
     with connect() as c:
-        row=c.execute("""update public.piano_attempts set status='PROCESSING',lease_until=now()+interval '10 minutes',updated_at=now()
-            where id=%s and (status in ('UPLOADED','FAILED') or (status='PROCESSING' and lease_until<now())) returning *""",(attempt_id,)).fetchone()
+        row=c.execute("""update public.piano_attempts set status='PROCESSING',lease_token=%s,lease_until=now()+interval '10 minutes',updated_at=now()
+            where id=%s and (status in ('UPLOADED','FAILED') or (status='PROCESSING' and lease_until<now())) returning *""",(lease_token,attempt_id,)).fetchone()
         if not row:
             current=c.execute('select status from public.piano_attempts where id=%s',(attempt_id,)).fetchone()
             if current and current['status']=='READY': return
@@ -225,12 +241,9 @@ def process(attempt_id):
                     ):
                         raise
         with connect() as c:
-            c.execute('select pg_advisory_xact_lock(hashtext(%s))',(attempt_id,))
-            c.execute("update public.piano_attempts set status='READY',result_key=%s,summary=%s,alignment_run_id=%s,error_code=null,lease_until=null,updated_at=now() where id=%s",(result_key,Jsonb(result['summary']),result['alignment_run_id'],attempt_id))
-            payload=dict(event_type='alignment.completed',attempt_id=attempt_id,alignment_run_id=result['alignment_run_id'],result_key=result_key)
-            c.execute('insert into public.piano_outbox(event_type,aggregate_id,payload) values(%s,%s,%s) on conflict do nothing',('alignment.completed',result['alignment_run_id'],Jsonb(payload)))
+            commit_alignment(c,attempt_id,lease_token,result_key,result)
     except Exception as exc:
-        with connect() as c: c.execute("update public.piano_attempts set status='FAILED',error_code=%s,lease_until=null,updated_at=now() where id=%s and status<>'READY'",(type(exc).__name__,attempt_id))
+        with connect() as c: c.execute("update public.piano_attempts set status='FAILED',error_code=%s,lease_until=null,updated_at=now() where id=%s and lease_token=%s and status<>'READY'",(type(exc).__name__,attempt_id,lease_token))
         raise
 
 def relay(limit=100):

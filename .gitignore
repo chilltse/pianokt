@@ -20,6 +20,7 @@ tsconfig.tsbuildinfo
 # Local debug
 tests/local_debug/*
 !tests/local_debug/alignment_debug.py
+artifacts/
 
 # Additional notes
 *_mynotes.*
@@ -37,3 +38,5 @@ backend/.env
 *.tfstate*
 *.tfplan
 terraform.tfvars
+
+.lockb-*.tmp

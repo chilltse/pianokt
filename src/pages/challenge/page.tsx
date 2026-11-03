@@ -1,5 +1,11 @@
 import Toast from '@/components/Toast'
-import { isChallengeSuccess, saveChallengeRecording } from '@/features/challenge-history'
+import { activityPacket, interruptAttempt } from '@/features/activity'
+import {
+  isChallengeSuccess,
+  localAlignmentLabEnabled,
+  runLocalAlignment,
+  saveChallengeRecording,
+} from '@/features/challenge-history'
 import type { PlayEventType } from '@/features/challenge-history'
 import { referenceSnapshot } from '@/features/challenge-history/referenceSnapshot'
 import { useSongScrubTimes } from '@/features/controls'
@@ -36,8 +42,10 @@ import clsx from 'clsx'
 import { useAtomValue } from 'jotai'
 import { AlertCircle, ArrowLeft } from 'lucide-react'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { Navigate, useNavigate, useSearchParams } from 'react-router'
 import ChallengeSuccessModal, { type ChallengeEndVariant } from './ChallengeSuccessModal'
+import { LocalAlignmentTimeline } from './LocalAlignmentTimeline'
+import { useChallengeAttempt } from './useChallengeAttempt'
 
 function SongNotFound({ songTitle, onGoBack }: { songTitle?: string; onGoBack: () => void }) {
   return (
@@ -66,15 +74,14 @@ function SongNotFound({ songTitle, onGoBack }: { songTitle?: string; onGoBack: (
 
 export default function ChallengePage() {
   const [searchParams] = useSearchParams()
+  const source = searchParams.get('source') as SongSource | null
+  const id = searchParams.get('id')
+  if (!source || !id) return <Navigate to="/" replace />
+  return <ChallengeAttempt key={`${source}:${id}`} source={source} id={id} />
+}
+
+function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
   const navigate = useNavigate()
-  let { source, id }: { source: SongSource; id: string } = Object.fromEntries(searchParams) as any
-
-  if (!source || !id) {
-    navigate('/', { replace: true })
-    return null
-  }
-  id = decodeURIComponent(id)
-
   const player = usePlayer()
   const playerState = usePlayerState()
   const countdownTotal = useAtomValue(player.countdownTotal)
@@ -88,9 +95,9 @@ export default function ChallengePage() {
   const [endModalVariant, setEndModalVariant] = useState<ChallengeEndVariant>('success')
   const [isConfirmExitOpen, setIsConfirmExitOpen] = useState(false)
   const [toastMsg, setToastMsg] = useState<string | null>('')
+  const [localAlignment, setLocalAlignment] = useState<Record<string, any> | null>(null)
   const [toastKey, setToastKey] = useState<string>('')
   const toastKeyRef = useRef(toastKey)
-  const playSessionIdRef = useRef<string | null>(null)
   // Frozen when a Challenge transport is armed. Countdown consumes wall time
   // but not song time, so this preserves the exact score origin that playback
   // will use once it actually begins.
@@ -98,32 +105,6 @@ export default function ChallengePage() {
     range: { start: number; end: number }
     config: SongConfig
   } | null>(null)
-  const pendingTransportEventRef = useRef<Extract<
-    PlayEventType,
-    'play_started' | 'resumed'
-  > | null>(null)
-  // Assignment is armed before a count-in, whereas a valid challenge cycle
-  // only starts when the score transport actually starts. Keep those states
-  // distinct so a rapid count-in cancel/pause cannot manufacture a cycle that
-  // begins with `paused` or `resumed`.
-  const recordedTransportStartedRef = useRef(false)
-  const challengeEventsRef = useRef<
-    Array<{
-      eventId: string
-      eventType: Extract<
-        PlayEventType,
-        'play_started' | 'paused' | 'resumed' | 'finished' | 'exited'
-      >
-      songTimeSec: number
-      clientTs: string
-      metadata: Record<string, unknown>
-    }>
-  >([])
-  const playStartedAtMsRef = useRef<number | null>(null)
-  const accumulatedPlayMsRef = useRef(0)
-  const terminalFlowInFlightRef = useRef(false)
-  // Mirrors terminalFlowInFlightRef for rendering; the ref is what guards synchronously.
-  const [isFinalizing, setIsFinalizing] = useState(false)
   // The upload outlives this route, so toasts must not fire after unmount.
   const isMountedRef = useRef(true)
   const { currentTime, duration } = useSongScrubTimes()
@@ -142,7 +123,11 @@ export default function ChallengePage() {
   )
 
   useWakeLock()
-  useOnUnmount(() => player.stop())
+  useOnUnmount(() => {
+    markPlayingStopped()
+    interruptAttempt('route_left', nowSongSec(), getTimePlayingSec())
+    player.stop()
+  })
 
   const hand =
     songConfig.left && songConfig.right
@@ -219,6 +204,34 @@ export default function ChallengePage() {
     flushSilenceTo,
   } = useSegmentedRecordMidi(midiState, nowSongSec)
 
+  const {
+    accumulatedPlayMsRef,
+    playSessionIdRef,
+    attemptContextRef,
+    pendingTransportEventRef,
+    recordedTransportStartedRef,
+    challengeEventsRef,
+    terminalFlowInFlightRef,
+    isFinalizing,
+    markPlayingStarted,
+    markPlayingStopped,
+    getTimePlayingSec,
+    setTerminalFlowInFlight,
+    resetPlaySessionTracking,
+    recordChallengeEvent,
+    toActivityEvent,
+  } = useChallengeAttempt({
+    songId: id,
+    source,
+    songTime: nowSongSec,
+    songDuration: () => getSongDurationSec(),
+    difficulty: songMeta?.difficulty ?? null,
+    isMounted: () => isMountedRef.current,
+    resetAssignment: () => {
+      challengeAssignmentRef.current = null
+    },
+  })
+
   function showToast(msg: string) {
     if (!isMountedRef.current) {
       console.info('[Challenge]', msg)
@@ -247,67 +260,15 @@ export default function ChallengePage() {
     return Number.isFinite(fallback) && fallback > 0 ? fallback : 0
   }
 
-  const markPlayingStarted = () => {
-    if (playStartedAtMsRef.current == null) {
-      playStartedAtMsRef.current = performance.now()
-    }
-  }
-
-  const markPlayingStopped = () => {
-    if (playStartedAtMsRef.current == null) return
-    accumulatedPlayMsRef.current += performance.now() - playStartedAtMsRef.current
-    playStartedAtMsRef.current = null
-  }
-
-  const getTimePlayingSec = () => {
-    let elapsedMs = accumulatedPlayMsRef.current
-    if (playStartedAtMsRef.current != null) {
-      elapsedMs += performance.now() - playStartedAtMsRef.current
-    }
-    return Math.max(0, elapsedMs / 1000)
-  }
-
-  const setTerminalFlowInFlight = (value: boolean) => {
-    terminalFlowInFlightRef.current = value
-    if (isMountedRef.current) setIsFinalizing(value)
-  }
-
-  const resetPlaySessionTracking = () => {
-    playSessionIdRef.current = null
-    challengeEventsRef.current = []
-    challengeAssignmentRef.current = null
-    pendingTransportEventRef.current = null
-    recordedTransportStartedRef.current = false
-    playStartedAtMsRef.current = null
-    accumulatedPlayMsRef.current = 0
-    setTerminalFlowInFlight(false)
-  }
-
-  const recordChallengeEvent = (
-    eventType: Extract<
-      PlayEventType,
-      'play_started' | 'paused' | 'resumed' | 'finished' | 'exited'
-    >,
-    metadata: Record<string, unknown> = {},
-    songTimeSecOverride?: number,
-    sessionIdOverride?: string,
-  ): void => {
-    const sessionId = sessionIdOverride ?? playSessionIdRef.current
-    if (!sessionId) return
-    challengeEventsRef.current.push({
-      eventId: crypto.randomUUID(),
-      eventType,
-      songTimeSec: songTimeSecOverride ?? nowSongSec(),
-      clientTs: new Date().toISOString(),
-      metadata: {
-        source,
-        song_duration_sec: getSongDurationSec(),
-        time_playing_sec: Number(getTimePlayingSec().toFixed(3)),
-        difficulty: songMeta?.difficulty ?? null,
-        ...metadata,
-      },
-    })
-  }
+  useEventListener<PageTransitionEvent>('pagehide', () => {
+    if (!recordedTransportStartedRef.current || !playSessionIdRef.current) return
+    const songTime = nowSongSec()
+    markPlayingStopped()
+    interruptAttempt('page_left', songTime, getTimePlayingSec())
+    stopRecording(songTime)
+    player.stop()
+    resetPlaySessionTracking()
+  })
 
   const freezeChallengeAssignment = () => {
     if (challengeAssignmentRef.current) return challengeAssignmentRef.current
@@ -390,6 +351,28 @@ export default function ChallengePage() {
     const base64 = bytesToBase64(midiBytes)
     const difficulty = songMeta?.difficulty ?? 0
 
+    if (localAlignmentLabEnabled) {
+      try {
+        const result = await runLocalAlignment({
+          performanceMidiBase64: base64,
+          referenceMidiBase64: params.referenceMidiBase64,
+          performanceEvents: params.performanceEvents,
+          observedEndSec: params.observedRange.end - params.observedRange.start,
+          referenceOriginSec: params.observedRange.start,
+        })
+        setLocalAlignment(result)
+        const outputPath =
+          typeof result.local_output_path === 'string' ? result.local_output_path : null
+        showToast(outputPath ? `Local dataset saved: ${outputPath}` : 'Local alignment complete.')
+        return String(result.alignment_run_id ?? 'local')
+      } catch (error) {
+        showToast(
+          `Local alignment failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        )
+        return null
+      }
+    }
+
     const inputs = await getMidiInputs()
     const midiKeyboardUsed = inputs.size > 0
 
@@ -402,6 +385,7 @@ export default function ChallengePage() {
       referenceMidiBase64: params.referenceMidiBase64,
       performanceEvents: params.performanceEvents,
       sessionId: params.sessionId,
+      activity: activityPacket(attemptContextRef.current, params.cycle.events.map(toActivityEvent)),
       practiceSettings: {
         // `range` remains the compatibility field consumed by existing workers.
         // Both range fields make it explicit that reference.mid is only the part
@@ -579,13 +563,21 @@ export default function ChallengePage() {
       return
     }
 
-    // Route changes keep this SPA's JavaScript context alive, so upload can proceed without
-    // blocking the exit interaction. If the browser is closed before finalize commits, the
-    // incomplete attempt remains invisible rather than becoming a partial challenge record.
-    navigate('/')
-    void finalizeSession('exited', terminal, { reason }).catch((error) => {
-      console.error('[Challenge] Background save failed:', error)
-    })
+    // The local lab must remain on this page so its result panel can be displayed.
+    if (localAlignmentLabEnabled) {
+      void finalizeSession('exited', terminal, { reason }).catch((error) => {
+        console.error('[Challenge] Local alignment failed:', error)
+      })
+      return
+    }
+    void finalizeSession('exited', terminal, { reason })
+      .then((saved) => {
+        if (saved) navigate('/')
+      })
+      .catch((error) => {
+        console.error('[Challenge] Save failed:', error)
+        showToast('Recording could not be saved. Please keep this page open.')
+      })
   }
 
   // ✅ 你要的：只要在播放（playing=true）就录音，即使没弹键也要录
@@ -864,6 +856,74 @@ export default function ChallengePage() {
                 Exit
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {localAlignment && (
+        <div className="fixed inset-0 z-50 overflow-auto bg-black/70 p-6">
+          <div className="mx-auto max-w-4xl rounded-lg bg-white p-5 text-slate-900">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-bold">Local alignment result</h2>
+                <p className="text-sm text-slate-600">
+                  Production align() ran locally. Result saved to the local alignment output
+                  directory.
+                </p>
+              </div>
+              <button
+                className="rounded bg-slate-800 px-3 py-1.5 text-sm text-white"
+                onClick={() => setLocalAlignment(null)}
+              >
+                Close
+              </button>
+            </div>
+            <LocalAlignmentTimeline result={localAlignment} />
+            <div className="mt-4 max-h-[65vh] overflow-auto rounded bg-slate-950 p-3 font-mono text-xs text-slate-100">
+              {(localAlignment.notes ?? []).map((note: any, index: number) => (
+                <div key={index}>
+                  {note.alignment_type} · R {note.ref_pitch ?? '–'} → P{' '}
+                  {note.performance_pitch ?? '–'} ·{' '}
+                  {note.raw_timing_deviation_sec == null
+                    ? ''
+                    : `${(note.raw_timing_deviation_sec * 1000).toFixed(0)} ms`}{' '}
+                  · {note.is_correct ? 'correct' : `reject ${note.reject_reason}`}
+                </div>
+              ))}
+            </div>
+            <h3 className="mt-5 font-semibold">events_data: hand-level aggregation</h3>
+            <div className="mt-2 grid gap-3 md:grid-cols-2">
+              {(['left_hand', 'right_hand'] as const).map((hand, handIndex) => {
+                const events = localAlignment.events_data
+                return (
+                  <div className="rounded border border-slate-200 p-3 text-xs" key={hand}>
+                    <b>{hand}</b>
+                    {(events?.onset_seconds ?? []).map((time: number, index: number) => (
+                      <div className="mt-1 font-mono" key={index}>
+                        {time}s · pitches {(events.pitches[index]?.[handIndex] ?? []).join(',')} ·
+                        reject {(events.reject_reason.note[index]?.[handIndex] ?? []).join(',')} ·
+                        timing {(events.timing_offset_ms[index]?.[handIndex] ?? []).join(',')}ms
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+            <button
+              className="mt-4 rounded border border-slate-400 px-3 py-1.5 text-sm"
+              onClick={() => {
+                const blob = new Blob([JSON.stringify(localAlignment, null, 2)], {
+                  type: 'application/json',
+                })
+                const url = URL.createObjectURL(blob)
+                const link = document.createElement('a')
+                link.href = url
+                link.download = 'local-alignment-result.json'
+                link.click()
+                URL.revokeObjectURL(url)
+              }}
+            >
+              Download real result.json
+            </button>
           </div>
         </div>
       )}

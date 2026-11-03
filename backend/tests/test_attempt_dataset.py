@@ -87,3 +87,14 @@ def test_exercise_identity_does_not_depend_on_early_exit_crop(tmp_path):
     r['score_version']='shorter-observed-crop'
     second=build_record(r,context['attempts'][0],1,2)
     assert first['exercise_id']==second['exercise_id']
+
+
+def test_explicit_run_selection_and_manifest_validation(tmp_path):
+    from pianokt_backend.publication import read_bundle
+    store,tables,context=fixture(tmp_path)
+    r=json.loads(store.read('alignment/a1/result.json')); r['alignment_run_id']='duplicate'
+    store.json('alignment/duplicate/result.json',r)
+    export_attempts(store,tables,'2026-02-01T00:00:00Z','datasets/selected',context,{'a1':'duplicate'})
+    manifest,files=read_bundle(store,'datasets/selected')
+    assert manifest['count']==1
+    assert json.loads(files['index_map.json'])[0]['alignment_run_id']=='duplicate'

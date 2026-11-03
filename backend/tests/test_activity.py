@@ -29,7 +29,7 @@ class Connection:
         self.rows=response['rows']
         for row in self.rows:
             for k,v in row.items():
-                if k.endswith('_at') and isinstance(v,str): row[k]=datetime.fromisoformat(v.replace('Z','+00:00'))
+                if (k.endswith('_at') or k=='client_ts') and isinstance(v,str): row[k]=datetime.fromisoformat(v.replace('Z','+00:00'))
         return self
     def fetchone(self): return self.rows[0] if self.rows else None
     def fetchall(self): return self.rows
@@ -115,3 +115,101 @@ def test_actual_context_query_and_finalize_keeps_multiple_logs(db):
     assert float(db.execute('select days_since_signup from user_play_logs limit 1').fetchone()['days_since_signup'])>0
     context=read_context(db,utc('2099-01-01T00:00:00Z'))
     assert len(context['visits'])==1 and len(context['attempts'])==2 and len(context['events'])==4
+
+
+def test_activity_transaction_rolls_back_every_write_on_conflict(db):
+    save_activity(db,U,packet())
+    bad=packet(10); bad.events[0].song_time_sec=999
+    db.execute('begin')
+    try:
+        with pytest.raises(HTTPException,match='identity conflict'): save_activity(db,U,bad)
+    finally: db.execute('rollback')
+    assert db.execute('select last_sequence from student_visits').fetchone()['last_sequence']==1
+    assert db.execute('select count(*)::int n from student_attempt_events').fetchone()['n']==1
+
+
+def test_legacy_aggregation_uses_client_clock_and_finished_only(db):
+    db.execute("insert into play_events_raw(event_id,session_id,user_id,song_id,play_mode,event_type,song_time_sec,client_ts,metadata) values(%s,%s,%s,'song','challenge','play_started',0,'2026-01-01T08:00:00+08:00','{}')",(V,A,U))
+    db.execute("insert into play_events_raw(event_id,session_id,user_id,song_id,play_mode,event_type,song_time_sec,client_ts,metadata) values(%s,%s,%s,'song','challenge','exited',99,'2026-01-01T00:01:00Z','{\"song_duration_sec\":100}')",(A,A,U))
+    db.execute("select set_config('request.jwt.claim.sub',%s,false)",(U,))
+    db.execute('select upsert_user_play_log(%s)',(A,))
+    row=db.execute('select * from user_play_logs').fetchone()
+    assert row['started_at'].isoformat()=='2026-01-01T00:00:00+00:00'
+    assert not row['is_played_in_full']
+
+
+def test_leaderboard_excludes_pending_and_client_scores(db):
+    db.execute("insert into challenge_recordings(id,user_id,accuracy_pct,score_source) values(%s,%s,100,'pending'),(%s,%s,40,'aligned'),(%s,%s,95,'legacy')",(A,U,V,U,OTHER,U))
+    row=db.execute("select * from get_leaderboard('accuracy')").fetchone()
+    assert float(row['accuracy_avg'])==40 and row['challenge_count']==3
+
+
+def test_finalize_is_atomic_and_immutable_on_retry(db):
+    from pianokt_backend.upload_contracts import Finalize,validate_cycle
+    from pianokt_backend.upload_service import commit_finalization
+    db.execute('insert into piano_learner_keys(user_id) values(%s)',(U,))
+    meta={'session_id':A,'duration_sec':10,'settings':{'client_accuracy_pct':99}}
+    row=db.execute('''insert into piano_attempts(id,user_id,learner_key,song_id,song_source,metadata,performance_key,reference_key,performance_hash,reference_hash)
+      values(%s,%s,(select learner_key from piano_learner_keys where user_id=%s),'song','builtin',%s,'p','r','h','h') returning *''',(A,U,U,json.dumps(meta))).fetchone()
+    body=Finalize.model_validate({'cycle':{'session_id':A,'events':[
+        dict(event_id=V,event_type='play_started',song_time_sec=0,client_ts='2026-01-01T00:00:00Z'),
+        dict(event_id=A,event_type='exited',song_time_sec=1,client_ts='2026-01-01T00:00:01Z'),
+    ]}})
+    timestamps=validate_cycle(row,body.cycle)
+    # An error after the status/outbox/recording writes must roll them all back.
+    bad=body.model_copy(deep=True); bad.cycle.events[-1].metadata={'time_playing_sec':-1}
+    db.execute('begin')
+    try:
+        with pytest.raises(HTTPException,match='time_playing'): commit_finalization(db,row,U,bad,timestamps)
+    finally: db.execute('rollback')
+    assert db.execute('select status from piano_attempts').fetchone()['status']=='CREATED'
+    for table in ('piano_outbox','challenge_recordings','play_events_raw','user_play_logs'):
+        assert db.execute(f'select count(*)::int n from {table}').fetchone()['n']==0
+    db.execute('begin'); commit_finalization(db,row,U,body,timestamps); db.execute('commit')
+    db.execute('begin'); commit_finalization(db,row,U,body,timestamps); db.execute('commit')
+    assert db.execute("select count(*)::int n from piano_outbox where event_type='performance.uploaded'").fetchone()['n']==1
+    assert db.execute('select score_source from challenge_recordings').fetchone()['score_source']=='pending'
+    with pytest.raises(HTTPException,match='identity conflict'): commit_finalization(db,row,U,bad,timestamps)
+
+
+def test_worker_fencing_and_completion_rollback(db):
+    from pianokt_backend.worker import commit_alignment
+    db.execute('insert into piano_learner_keys(user_id) values(%s)',(U,))
+    db.execute("insert into piano_attempts(id,user_id,learner_key,song_id,song_source,performance_key,reference_key,performance_hash,reference_hash,status,lease_token) values(%s,%s,(select learner_key from piano_learner_keys where user_id=%s),'song','builtin','p','r','h','h','PROCESSING',%s)",(A,U,U,V))
+    db.execute("insert into challenge_recordings(id,user_id,score_source) values(%s,%s,'pending')",(A,U))
+    result={'alignment_run_id':'run','summary':{'accuracy':.8,'alignment_quality_valid':True}}
+    with pytest.raises(RuntimeError,match='superseded'): commit_alignment(db,A,OTHER,'result.json',result)
+    assert db.execute('select status from piano_attempts').fetchone()['status']=='PROCESSING'
+    # Failure after the READY write must roll it back as well.
+    db.execute("alter table challenge_recordings add constraint injected_failure check(accuracy_pct < 50)")
+    db.execute('begin')
+    try:
+        with pytest.raises(RuntimeError,match='injected_failure'): commit_alignment(db,A,V,'result.json',result)
+    finally: db.execute('rollback')
+    assert db.execute('select status from piano_attempts').fetchone()['status']=='PROCESSING'
+    assert db.execute('select result_digest from piano_attempts').fetchone()['result_digest'] is None
+    assert db.execute('select count(*)::int n from piano_outbox').fetchone()['n']==0
+    db.execute('alter table challenge_recordings drop constraint injected_failure')
+    db.execute('begin'); commit_alignment(db,A,V,'result.json',result); db.execute('commit')
+    assert db.execute('select status from piano_attempts').fetchone()['status']=='READY'
+    assert float(db.execute('select accuracy_pct from challenge_recordings').fetchone()['accuracy_pct'])==80
+    committed=db.execute('select result_digest,result_committed_at from piano_attempts').fetchone()
+    assert len(committed['result_digest'])==64 and committed['result_committed_at']
+    from pianokt_backend.pipeline.direct import read_committed
+    source=read_committed(db,'2100-01-01T00:00:00Z')
+    assert len(source.rows)==1 and str(source.rows[0]['attempt_id'])==A
+    assert read_committed(db,'2000-01-01T00:00:00Z').rows==()
+
+
+def test_legacy_atomic_rpc_retries_and_conflict_rolls_back(db):
+    db.execute("select set_config('request.jwt.claim.sub',%s,false)",(U,))
+    db.execute('set role authenticated')
+    sql="select log_play_event_atomic(%s,%s,'song',null,'freeplay','finished',1,'2026-01-01T00:00:01Z','{}')"
+    db.execute(sql,(V,A)); db.execute(sql,(V,A))
+    assert db.execute('select count(*)::int n from play_events_raw').fetchone()['n']==1
+    assert db.execute('select events_count from user_play_logs').fetchone()['events_count']==1
+    with pytest.raises(RuntimeError,match='identity conflict'):
+        db.execute("select log_play_event_atomic(%s,%s,'other',null,'freeplay','finished',1,'2026-01-01T00:00:01Z','{}')",(V,A))
+    assert db.execute('select song_id from user_play_logs').fetchone()['song_id']=='song'
+    with pytest.raises(RuntimeError,match='permission denied'):
+        db.execute("select log_play_event(%s,%s,'song')",(OTHER,A))

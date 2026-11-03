@@ -19,3 +19,4 @@ export type {
   UserPlayLogRow,
 } from './types'
 export type { LeaderboardSortBy } from './api'
+export { localAlignmentLabEnabled, runLocalAlignment } from './gcs'

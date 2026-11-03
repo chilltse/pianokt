@@ -1,97 +1,37 @@
-# 相对原 PianoKT 的变更清单
+# PianoKT 工程演进与当前文档索引
 
-以用户上传的 pianokt(1).zip 为基线，按同名文件内容 SHA-256 比较。保留原应用目录、播放器主体、歌曲与音色资源；新增 Python 后端和云端数据管道。下方为实际文件集合，不是计划清单。
+更新日期：2026-11-03。此文件概括演进关系；当前架构以 [架构总览](ARCHITECTURE_ZH.md) 和 [实现参考](PIANOKT_SYSTEM_REFERENCE_ZH.md) 为准，具体事务重构见 [变更记录](REFACTOR_AND_DATA_INTEGRITY_ZH.md)。
 
-新增 48 个文件，修改 11 个文件，保留 465 个同内容文件；业务源文件删除 0 个。构建产物、依赖目录、Git 历史、本地数据、状态和真实环境变量文件不纳入比较或交付。
+## 1. 保留的前端基础
 
-## 修改的含义
+原浏览器练习应用继续提供曲目加载、播放器、谱面/落键显示、音色、MIDI/键盘输入、普通练习/Freeplay/训练等能力。新增数据链路集中接入 Challenge，没有把所有原有页面改成服务端驱动。
 
-| 位置 | 实际变化 |
-|---|---|
-| Challenge 保存入口 | 同时创建参考快照和演奏文件，保存终止播放位置及练习上下文，调用 GCS 上传链路 |
-| challenge-history/api.ts | 删除新录音的 Supabase Storage 上传实现，导出 GCS 保存函数；旧录音只保留下载兼容 |
-| MIDI recorder | Challenge 的每个 note-on/off 采样歌曲时钟，减少 100 ms 静默刷新带来的事件时间量化 |
-| Recordings 页面 | 增加 alignment 状态与 JSON 下载、演示推荐入口 |
-| Auth / Avatar / Leaderboard | 修复原有 TypeScript 联合类型和可空 Supabase 引用检查，未更换原页面结构 |
-| analytics | 缺少可选 GA 配置时不再令生产构建中断 |
-| package-lock.json | 重新解析并锁定安装后的前端依赖；package.json 的应用依赖声明保留 |
-| README / ignore 配置 | 新后端入口、文档导航与本地数据/状态排除 |
+## 2. 保存与异步处理
 
-## 新增内容的职责
+新的 Challenge 从浏览器直传私有 GCS；FastAPI 验证 Supabase 身份、上传证据和最终提交。PostgreSQL 保存上传状态、录音列表、汇总及 outbox；relay 将消息发到 Pub/Sub，私有 worker 处理上传完成通知。
 
-- backend/pianokt_backend/api.py：Supabase token 与原白名单验证、GCS signed URL、finalize、状态与下载、推荐与反馈。
-- worker.py / worker_api.py：事务 outbox、lease、超时隔离、真实对齐、不可变结果复用与状态回写。
-- alignment/：提取 notebook 函数、MAD 时间校正、matcher 轨号恢复、明确左手单轨处理、逐音符与左右手结果。
-- pipeline/：Raw → Bronze → Silver → Gold、Delta MERGE、quality、completed 发布协议、Spark AvailableNow、训练快照。
-- supabase 009：在线状态和 outbox 新表/策略/触发器；额外提供专用后端角色与演示曲目种子。
-- infra/gcp：私有 bucket、服务账号和 IAM、Pub/Sub 与死信、两个 Cloud Run Service、两个 Job 和 Scheduler。
-- tests / scripts / docs：可复现测试、合成 MIDI、打包工具、教学文档和部署路线图。
+浏览器从仅缓存上传 ID，演进为 IndexedDB 封存完整 owner-scoped 录音包；服务器从独立写入，演进为最终提交事务、身份冲突检查、幂等重试与 worker 租约校验。
 
-## 没有交付为真实模型的部分
+历史 Supabase Storage 录音保留下载兼容，新录音不再走旧存储上传路径。
 
-没有训练 AKT/DKT，没有声称估计了校准能力或学习增益，没有自动生成新 MIDI 曲目。推荐为明确标识的黑盒演示实现。没有在用户云项目执行部署。未来工作与验收条件见部署路线图。
+## 3. 对齐与训练结构
 
-## 实际修改文件
+当前使用 time-guided-chord-monotonic-v3。历史 Parangonar 和双手聚合原型不是现行生产入口。对齐、手部判定、音符错误码与 onset/KC 构造拆为独立模块。
 
-- `.gitignore`
-- `README.md`
-- `package-lock.json`
-- `src/components/AvatarUploadZone.tsx`
-- `src/features/analytics/index.ts`
-- `src/features/auth/context.tsx`
-- `src/features/challenge-history/api.ts`
-- `src/features/midi/useSegmentedRecordMidi.ts`
-- `src/pages/challenge/page.tsx`
-- `src/pages/home/Leaderboard.tsx`
-- `src/pages/recordings/page.tsx`
+当前完整 result schema 为 3；列式 events_data 为 v1.1；attempt 数据集外层为 v1.2。visit/attempt 的真实时间线另表保存，导出使用 visit_index/attempt_index。
 
-## 实际新增文件
+## 4. 分析层与原子发布
 
-- `.dockerignore`
-- `.env.example`
-- `.github/workflows/backend.yml`
-- `Makefile`
-- `backend/.env.example`
-- `backend/Dockerfile`
-- `backend/Dockerfile.spark`
-- `backend/fetch-jars.sh`
-- `backend/pianokt_backend/__init__.py`
-- `backend/pianokt_backend/alignment/__init__.py`
-- `backend/pianokt_backend/alignment/prototype.py`
-- `backend/pianokt_backend/alignment/service.py`
-- `backend/pianokt_backend/alignment/tracks.py`
-- `backend/pianokt_backend/api.py`
-- `backend/pianokt_backend/cli.py`
-- `backend/pianokt_backend/contracts.py`
-- `backend/pianokt_backend/inference.py`
-- `backend/pianokt_backend/online.py`
-- `backend/pianokt_backend/pipeline/__init__.py`
-- `backend/pianokt_backend/pipeline/jobs.py`
-- `backend/pianokt_backend/pipeline/spark_events.py`
-- `backend/pianokt_backend/pipeline/tables.py`
-- `backend/pianokt_backend/pipeline/training.py`
-- `backend/pianokt_backend/storage.py`
-- `backend/pianokt_backend/worker.py`
-- `backend/pianokt_backend/worker_api.py`
-- `backend/pyproject.toml`
-- `backend/requirements.lock`
-- `backend/tests/schema.mjs`
-- `backend/tests/test_api.py`
-- `backend/tests/test_core.py`
-- `backend/tests/test_spark.py`
-- `backend/tests/test_two_hands.py`
-- `docs/CHANGES_ZH.md`
-- `docs/DEPLOYMENT_AND_ROADMAP_ZH.md`
-- `docs/PIANOKT_TEACHING_GUIDE_ZH.md`
-- `docs/VALIDATION_ZH.md`
-- `infra/gcp/main.tf`
-- `infra/gcp/terraform.tfvars.example`
-- `scripts/make_demo_midis.py`
-- `scripts/package_delivery.py`
-- `src/features/challenge-history/AlignmentStatus.tsx`
-- `src/features/challenge-history/Recommendations.tsx`
-- `src/features/challenge-history/gcs.ts`
-- `src/features/challenge-history/referenceSnapshot.ts`
-- `supabase/backend_role.sql`
-- `supabase/migrations/009_lakehouse_backend.sql`
-- `supabase/seed_demo_catalog.sql`
+对齐结果由 delta-rs 写入 Bronze/Silver/Gold；事件归档由 Spark AvailableNow 整理。正式 reader 使用完成集合，版本按 alignment_run_id 保留。attempt 数据集使用 create-only intent/files/manifest 发布，并校验摘要。
+
+## 5. 推荐与测试
+
+推荐入口和曝光/点击记录已经接通，模型仍为显式 DemoRecommender。当前导出不包含自动模型训练。
+
+最近测试与未验证云边界见 [验证记录](VALIDATION_ZH.md)，不能把本地测试通过当成云端部署完成。
+
+## 6. 2026-11-03 文档统一
+
+本次从实际源码重新整理：新增简单架构总览；重写系统参考、逐次演奏教程、登录录音、本地开发、部署与数据集说明；更新 README、验证记录和本文件。
+
+删除旧正文中把 Parangonar、仅 ID 缓存、旧录音 RPC、逐 attempt 覆盖、每日一次调度和页面对齐查看器当作当前行为的叙述。历史重构记录继续保留其日期、测试结果和实施边界。

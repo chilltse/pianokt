@@ -8,7 +8,8 @@ an unconstrained full-score DTW search.
 
 from __future__ import annotations
 
-import importlib.util
+from functools import partial
+from types import SimpleNamespace
 import json
 from collections import Counter
 from math import isfinite
@@ -18,7 +19,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from . import prototype
+from . import labels as note_labels, events
 from .time_guided import (
     align_chords,
     group_chords,
@@ -184,13 +185,13 @@ def correct_offset(
 
 
 def configured_labels(config: AlignmentConfig):
-    spec = importlib.util.spec_from_file_location("_pianokt_labels", prototype.__file__)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    module.TIMING_THRESHOLD_MS = config.timing_threshold_ms
-    module.INSERTION_ATTACH_WINDOW_SEC = config.insertion_attach_window_sec
-    return module
+    return SimpleNamespace(
+        KC_FEATURE_NAMES=events.KC_FEATURE_NAMES,
+        combine_reject_reasons=note_labels.combine_reject_reasons,
+        build_attempt_events_data=partial(events.build_attempt_events_data,
+            timing_threshold_ms=config.timing_threshold_ms,insertion_attach_window_sec=config.insertion_attach_window_sec),
+        classify_matched_note=partial(note_labels.classify_matched_note,timing_threshold_ms=config.timing_threshold_ms),
+    )
 
 
 _RAW_COLUMNS = [
@@ -201,11 +202,6 @@ _RAW_COLUMNS = [
     "performance_channel", "performance_velocity", "reference_chord_index",
     "performance_chord_index",
 ]
-
-
-def _empty_events_data() -> dict[str, Any]:
-    fields = ["reject_reason", "timing_offset", "pitch_offset", "duration", "onset_time", "pitches"]
-    return {"data": {"left_hand": {field: [] for field in fields}, "right_hand": {field: [] for field in fields}}}
 
 
 def _finite_nonnegative(value: Any) -> float | None:

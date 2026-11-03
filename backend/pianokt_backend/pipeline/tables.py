@@ -251,8 +251,26 @@ class Tables:
             .execute()
         )
 
-    def rows(self, name):
+    def raw_rows(self, name):
         try:
             return DeltaTable(self.root + '/' + name).to_pyarrow_table().to_pylist()
         except TableNotFoundError:
             return []
+
+
+    def snapshot(self, names):
+        """Pin the commit set once for a consistent multi-table logical read.
+
+        Bronze/quality are audit surfaces; Silver/Gold are committed projections.
+        Direct Delta readers must apply the same completed-run join.
+        """
+        completed_rows=self.raw_rows('ops/completed_runs')
+        completed={r['event_id'] for r in completed_rows}
+        practice={r['event_id'] for r in self.raw_rows('ops/practice_event_commits')} if 'silver/practice_events' in names else set()
+        def visible(name,row):
+            if name=='silver/practice_events': return row['event_id'] in practice
+            return not name.startswith(('silver/','gold/')) or row.get('alignment_run_id') in completed
+        return {name:(completed_rows if name=='ops/completed_runs' else [r for r in self.raw_rows(name) if visible(name,r)]) for name in names}
+
+    def rows(self, name):
+        return self.snapshot([name])[name]

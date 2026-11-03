@@ -13,26 +13,46 @@ def main():
     a.add_argument('--attempt-id'); a.add_argument('--song-id',default='local-example')
     a.add_argument('--raw',default='data/raw'); a.add_argument('--lake',default='data/lakehouse')
     a=sub.add_parser('pipeline'); a.add_argument('--replay',action='store_true')
-    sub.add_parser('relay'); a=sub.add_parser('worker'); a.add_argument('attempt_id')
+    a=sub.add_parser('relay'); a.add_argument('--limit',type=int,default=1000)
+    a=sub.add_parser('worker'); a.add_argument('attempt_id')
     sub.add_parser('spark-events')
-    a=sub.add_parser('export-training'); a.add_argument('--cutoff',required=True); a.add_argument('--output-key',required=True)
-    a=sub.add_parser('export-attempts'); a.add_argument('--cutoff',required=True); a.add_argument('--output-prefix',required=True)
+    a=sub.add_parser('export-training'); a.add_argument('--cutoff',required=True); a.add_argument('--output-key',required=True); a.add_argument('--run-selection',type=Path)
+    a=sub.add_parser('export-attempts'); a.add_argument('--cutoff',required=True); a.add_argument('--output-prefix',required=True); a.add_argument('--run-selection',type=Path)
+    for name in ('export-attempts','export-training'):
+        sub.choices[name].add_argument('--source',choices=('lake','direct'),default='lake')
     args=p.parse_args()
+    run_selection=json.loads(args.run_selection.read_text()) if getattr(args,'run_selection',None) else None
+    if run_selection is not None and (not isinstance(run_selection,dict) or any(not isinstance(k,str) or not isinstance(v,str) for k,v in run_selection.items())): p.error('run-selection must map attempt IDs to run IDs')
     if args.command=='export-attempts':
         from .pipeline.attempts import export_attempts,read_context,utc
-        from .pipeline.tables import Tables
         from .online import connect
         with connect() as c:
             c.execute('set transaction isolation level repeatable read read only')
             context=read_context(c,utc(args.cutoff))
-        print(json.dumps(export_attempts(Objects(os.getenv('RAW_ROOT','data/raw')),Tables(os.getenv('LAKE_ROOT','data/lakehouse')),args.cutoff,args.output_prefix,context))); return
+            if args.source=='direct':
+                from .pipeline.direct import read_committed
+                source=read_committed(c,utc(args.cutoff))
+        if args.source=='lake':
+            from .pipeline.tables import Tables
+            source=Tables(os.getenv('LAKE_ROOT','data/lakehouse'))
+        print(json.dumps(export_attempts(Objects(os.getenv('RAW_ROOT','data/raw')),source,args.cutoff,args.output_prefix,context,run_selection))); return
     if args.command=='export-training':
         from .pipeline.training import export_dataset
-        from .pipeline.tables import Tables
-        print(export_dataset(Objects(os.getenv('RAW_ROOT','data/raw')),Tables(os.getenv('LAKE_ROOT','data/lakehouse')),args.cutoff,args.output_key)); return
+        from .pipeline.attempts import read_context,utc
+        from .online import connect
+        with connect() as c:
+            c.execute('set transaction isolation level repeatable read read only')
+            context=read_context(c,utc(args.cutoff))
+            if args.source=='direct':
+                from .pipeline.direct import read_committed
+                source=read_committed(c,utc(args.cutoff))
+        if args.source=='lake':
+            from .pipeline.tables import Tables
+            source=Tables(os.getenv('LAKE_ROOT','data/lakehouse'))
+        print(export_dataset(Objects(os.getenv('RAW_ROOT','data/raw')),source,args.cutoff,args.output_key,context,run_selection)); return
     if args.command=='relay':
         from .worker import relay
-        print(relay()); return
+        print(relay(args.limit)); return
     if args.command=='worker':
         from .worker import process
         process(args.attempt_id); return

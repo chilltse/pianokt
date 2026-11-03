@@ -212,7 +212,7 @@ def test_contradictory_snapshot_window_is_never_clamped_to_zero():
         )
 
 
-def test_gold_is_quality_gated_and_attempt_fact_is_current_per_attempt(tmp_path):
+def test_gold_is_quality_gated_and_attempt_fact_preserves_committed_versions(tmp_path):
     reference = tmp_path / "reference.mid"
     performance = tmp_path / "performance.mid"
     expected = [(60, 0.0, 0.1), (62, 0.5, 0.1)]
@@ -260,9 +260,9 @@ def test_gold_is_quality_gated_and_attempt_fact_is_current_per_attempt(tmp_path)
     )
     publish_alignment(rerun, tables, "alignment/two/result.json")
     attempt_rows = tables.rows("gold/fact_alignment_attempt")
-    assert len(attempt_rows) == 1
+    assert len(attempt_rows) == 2
     assert attempt_rows[0]["attempt_id"] == "same-attempt"
-    assert attempt_rows[0]["alignment_run_id"] == rerun["alignment_run_id"]
+    assert {r["alignment_run_id"] for r in attempt_rows} == {valid["alignment_run_id"], rerun["alignment_run_id"]}
 
     invalid = copy.deepcopy(valid)
     invalid["alignment_run_id"] = "invalid-run"
@@ -281,7 +281,7 @@ def test_gold_is_quality_gated_and_attempt_fact_is_current_per_attempt(tmp_path)
         note["alignment_run_id"] = "invalid-run"
         note["attempt_id"] = "invalid-attempt"
     publish_alignment(invalid, tables, "alignment/invalid/result.json")
-    assert len(tables.rows("gold/fact_alignment_attempt")) == 1
+    assert len(tables.rows("gold/fact_alignment_attempt")) == 2
     assert len(tables.rows("quality/alignment_runs")) == 1
     assert _result_quality({"alignment_run_id": "legacy", "attempt_id": "legacy"}) == (
         False,
