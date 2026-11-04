@@ -53,3 +53,41 @@ test('local persistence failure prevents all network writes', async () => {
   await assert.rejects(queue.enqueue({ id: 'a', ownerId: 'alice', payload: 'raw' }))
   assert.equal(sent, false)
 })
+
+test('local seal completes before remote delivery and concurrent recovery sends once', async () => {
+  const rows = new Map<string, PendingUpload<string>>()
+  let release!: () => void
+  const network = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let sends = 0
+  const queue = new UploadQueue<string>(
+    {
+      async seal(record) {
+        rows.set(`${record.ownerId}:${record.id}`, record)
+      },
+      async list() {
+        return [...rows]
+      },
+      async remove(key) {
+        rows.delete(key)
+      },
+    },
+    async () => {
+      sends++
+      await network
+    },
+  )
+  await queue.seal({ id: 'a', ownerId: 'alice', payload: 'immutable bundle' })
+  assert.equal(sends, 0)
+  assert.equal(rows.size, 1)
+  const first = queue.replay('alice')
+  const second = queue.replay('alice')
+  await Promise.resolve()
+  assert.equal(sends, 1)
+  assert.equal(rows.size, 1)
+  release()
+  assert.deepEqual(await first, [])
+  assert.deepEqual(await second, [])
+  assert.equal(rows.size, 0)
+})

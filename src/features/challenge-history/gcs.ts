@@ -231,7 +231,9 @@ export async function saveGcsRecording(
       throw new Error('Immutable upload bundle conflict')
     unsealed.set(key, record)
     window.addEventListener('beforeunload', protectUnsealed)
-    await uploadQueue().enqueue(record, () => sealed(key))
+    await uploadQueue().seal(record, () => sealed(key))
+    // Route lifetime ends at durable local commit; global recovery owns remote delivery.
+    void resumePendingUploads(ownerId)
     return { id }
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Upload failed' }

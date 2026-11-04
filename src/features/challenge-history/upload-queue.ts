@@ -29,25 +29,40 @@ export function indexedUploadStore<T>(): UploadStore<T> {
 
 /** A failed request keeps the sealed bundle. Removal happens only after server commit. */
 export class UploadQueue<T> {
+  private inFlight = new Map<string, Promise<void>>()
   constructor(
     private store: UploadStore<T>,
     private send: (record: PendingUpload<T>) => Promise<void>,
   ) {}
 
-  async enqueue(record: PendingUpload<T>, onSealed?: () => void) {
+  async seal(record: PendingUpload<T>, onSealed?: () => void) {
     await this.store.seal(record)
     onSealed?.()
-    await this.send(record)
-    await this.store.remove(`${record.ownerId}:${record.id}`)
+  }
+
+  private deliver(record: PendingUpload<T>) {
+    const key = `${record.ownerId}:${record.id}`
+    const existing = this.inFlight.get(key)
+    if (existing) return existing
+    const pending = (async () => {
+      await this.send(record)
+      await this.store.remove(key)
+    })().finally(() => this.inFlight.delete(key))
+    this.inFlight.set(key, pending)
+    return pending
+  }
+
+  async enqueue(record: PendingUpload<T>, onSealed?: () => void) {
+    await this.seal(record, onSealed)
+    await this.deliver(record)
   }
 
   async replay(ownerId: string) {
     const failures: unknown[] = []
-    for (const [key, record] of await this.store.list()) {
+    for (const [, record] of await this.store.list()) {
       if (record.ownerId !== ownerId) continue
       try {
-        await this.send(record)
-        await this.store.remove(key)
+        await this.deliver(record)
       } catch (error) {
         failures.push(error)
       }

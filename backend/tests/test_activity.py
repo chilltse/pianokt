@@ -213,3 +213,43 @@ def test_legacy_atomic_rpc_retries_and_conflict_rolls_back(db):
     assert db.execute('select song_id from user_play_logs').fetchone()['song_id']=='song'
     with pytest.raises(RuntimeError,match='permission denied'):
         db.execute("select log_play_event(%s,%s,'song')",(OTHER,A))
+
+
+@pytest.mark.parametrize('digits', [0, 1])
+def test_long_decimal_activity_and_finalize_are_idempotent(db, digits):
+    from pianokt_backend.upload_contracts import ChallengeCycle, commit_cycle, validate_cycle
+    db.execute(f'set extra_float_digits = {digits}')
+    body = packet()
+    body.events[0].song_time_sec = 0.12345678901234567
+    body.events[0].elapsed_playing_sec = 0.9876543210987654
+    end = packet(2, event_sequence=1, event_type='finished').events[0]
+    end.song_time_sec = 1.2345678901234567
+    end.elapsed_playing_sec = 1.9876543210987654
+    body.events.append(end)
+    for event in body.events:
+        event.metadata = {'time_playing_sec': event.elapsed_playing_sec}
+    # Live activity, then the identical complete packet submitted by /attempts.
+    save_activity(db, U, body)
+    save_activity(db, U, body)
+    db.execute('insert into challenge_recordings(id,user_id) values(%s,%s)', (A,U))
+    cycle = ChallengeCycle.model_validate(dict(session_id=A, events=[
+        dict(event_id=e.event_id, event_type=e.event_type, client_ts=e.occurred_at,
+             song_time_sec=e.song_time_sec, metadata=e.metadata) for e in body.events
+    ]))
+    row = {'id': A, 'song_id': 'song', 'metadata': {'session_id': A, 'duration_sec': 10}}
+    timestamps = validate_cycle(row, cycle)
+    commit_cycle(db, row, U, cycle, timestamps)
+    commit_cycle(db, row, U, cycle, timestamps)
+    assert db.execute('select count(*)::int n from student_attempt_events').fetchone()['n'] == 2
+    assert db.execute('select count(*)::int n from play_events_raw').fetchone()['n'] == 2
+    # Even a one-ULP real change must remain a conflict; no rounding/tolerance workaround.
+    import math
+    for field in ('song_time_sec', 'elapsed_playing_sec'):
+        changed = body.model_copy(deep=True)
+        setattr(changed.events[0], field, math.nextafter(getattr(changed.events[0], field), math.inf))
+        with pytest.raises(HTTPException, match='Activity event identity conflict'):
+            save_activity(db, U, changed)
+    changed_cycle = cycle.model_copy(deep=True)
+    changed_cycle.events[0].song_time_sec = math.nextafter(cycle.events[0].song_time_sec, math.inf)
+    with pytest.raises(HTTPException, match='Cycle event identity conflict'):
+        commit_cycle(db, row, U, changed_cycle, timestamps)

@@ -27,6 +27,7 @@ export type ChallengeEndVariant = 'success' | 'complete'
 
 type ChallengeSuccessModalProps = {
   show: boolean
+  isSaving?: boolean
   onClose: () => void
   /** success = 达标祝贺；complete = 未达标，显示 Challenge again / Back to Home */
   variant?: ChallengeEndVariant
@@ -38,6 +39,7 @@ type ChallengeSuccessModalProps = {
 
 export default function ChallengeSuccessModal({
   show,
+  isSaving = false,
   onClose,
   variant = 'success',
   videoSrcSuccess = DEFAULT_VIDEO_SUCCESS,
@@ -48,11 +50,13 @@ export default function ChallengeSuccessModal({
   const user = auth?.user ?? null
 
   const handleChallengeAgain = () => {
+    if (isSaving) return
     onClose()
     navigate(user ? `/challenge-songs/${user.id}` : '/challenge-songs')
   }
 
   const handleBackToHome = () => {
+    if (isSaving) return
     onClose()
     navigate('/')
   }
@@ -80,12 +84,12 @@ export default function ChallengeSuccessModal({
     <ModalOverlay
       className={(p) => overlayStyles(p)}
       isOpen={show}
-      isDismissable
+      isDismissable={!isSaving}
       onOpenChange={(open) => {
-        if (!open) onClose()
+        if (!open && !isSaving) onClose()
       }}
     >
-      <RACModal className={(p) => modalStyles(p)} isDismissable>
+      <RACModal className={(p) => modalStyles(p)} isDismissable={!isSaving}>
         <div className="flex flex-col">
           <div className="relative aspect-video w-full bg-black/5">
             <video
@@ -101,21 +105,26 @@ export default function ChallengeSuccessModal({
               aria-hidden
             />
           </div>
-          <div className="px-6 pb-6 pt-4">
+          <div className="px-6 pt-4 pb-6">
             {isSuccess ? (
               <>
                 <h2 className="text-xl font-semibold text-gray-900">Congratulations!</h2>
-                <p className="mt-1 text-sm text-gray-600">You passed this challenge with flying colors.</p>
+                <p className="mt-1 text-sm text-gray-600">
+                  You passed this challenge with flying colors.
+                </p>
               </>
             ) : (
               <>
                 <h2 className="text-xl font-semibold text-gray-900">Challenge complete</h2>
-                <p className="mt-1 text-sm text-gray-600">Keep practicing to hit your target next time.</p>
+                <p className="mt-1 text-sm text-gray-600">
+                  Keep practicing to hit your target next time.
+                </p>
               </>
             )}
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
               <button
                 type="button"
+                disabled={isSaving}
                 onClick={handleChallengeAgain}
                 className="rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-amber-600"
               >
@@ -123,6 +132,7 @@ export default function ChallengeSuccessModal({
               </button>
               <button
                 type="button"
+                disabled={isSaving}
                 onClick={handleBackToHome}
                 className="rounded-lg border border-amber-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-amber-50"
               >

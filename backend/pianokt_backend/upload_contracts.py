@@ -212,8 +212,8 @@ def commit_cycle(c,row,uid,cycle,timestamps):
         c.execute('''insert into public.play_events_raw(event_id,session_id,user_id,song_id,exercise_id,play_mode,event_type,song_time_sec,client_ts,metadata)
             values(%s,%s,%s,%s,%s,'challenge',%s,%s,%s,%s) on conflict(event_id) do nothing''',
             (event.event_id,cycle.session_id,uid,row['song_id'],f"challenge:{row['song_id']}",event.event_type,event.song_time_sec,event.client_ts,Jsonb(event.metadata)))
-        saved=c.execute('select * from public.play_events_raw where event_id=%s',(event.event_id,)).fetchone()
-        if not saved or str(saved['user_id'])!=str(uid) or str(saved['session_id'])!=str(cycle.session_id) or saved['event_type']!=event.event_type or saved['client_ts']!=event.client_ts or (saved['song_time_sec'] is None or float(saved['song_time_sec'])!=event.song_time_sec) or saved['metadata']!=event.metadata:
+        saved=c.execute('select *, song_time_sec is not distinct from %s::double precision as song_time_matches from public.play_events_raw where event_id=%s',(event.song_time_sec,event.event_id)).fetchone()
+        if not saved or str(saved['user_id'])!=str(uid) or str(saved['session_id'])!=str(cycle.session_id) or saved['event_type']!=event.event_type or saved['client_ts']!=event.client_ts or not saved['song_time_matches'] or saved['metadata']!=event.metadata:
             raise HTTPException(409,'Cycle event identity conflict')
     context=c.execute('select started_at from public.student_attempts where attempt_id=%s and user_id=%s',(row['id'],uid)).fetchone()
     if context and context['started_at']!=timestamps[0]:
@@ -222,8 +222,8 @@ def commit_cycle(c,row,uid,cycle,timestamps):
         count=c.execute('select count(*) as n from public.student_attempt_events where attempt_id=%s',(row['id'],)).fetchone()['n']
         if int(count)!=len(cycle.events): raise HTTPException(409,'Finalized cycle omits recorded activity')
         for index,event in enumerate(cycle.events):
-            saved=c.execute('select * from public.student_attempt_events where event_id=%s and attempt_id=%s',(event.event_id,row['id'])).fetchone()
-            if not saved or saved['event_sequence']!=index or saved['event_type']!=event.event_type or saved['occurred_at']!=timestamps[index] or (saved['song_time_sec'] is None or float(saved['song_time_sec'])!=event.song_time_sec) or saved['metadata']!=event.metadata:
+            saved=c.execute('select *, song_time_sec is not distinct from %s::double precision as song_time_matches from public.student_attempt_events where event_id=%s and attempt_id=%s',(event.song_time_sec,event.event_id,row['id'])).fetchone()
+            if not saved or saved['event_sequence']!=index or saved['event_type']!=event.event_type or saved['occurred_at']!=timestamps[index] or not saved['song_time_matches'] or saved['metadata']!=event.metadata:
                 raise HTTPException(409,'Finalized cycle differs from recorded activity')
     terminal=cycle.events[-1]
     terminal_metadata=terminal.metadata

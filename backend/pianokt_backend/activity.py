@@ -1,5 +1,6 @@
 """Durable visit/attempt history, independent of MIDI finalization."""
 import json
+import logging
 from typing import Literal
 from uuid import UUID
 from fastapi import HTTPException
@@ -83,8 +84,25 @@ def save_activity(c, uid, body):
         c.execute('''insert into public.student_attempt_events(event_id,attempt_id,user_id,event_sequence,event_type,occurred_at,song_time_sec,elapsed_playing_sec,metadata)
             values(%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict do nothing''',
             (e.event_id, a.attempt_id, uid, e.event_sequence, e.event_type, e.occurred_at, e.song_time_sec, e.elapsed_playing_sec, Jsonb(e.metadata)))
-        stored = c.execute('select * from public.student_attempt_events where event_id=%s', (e.event_id,)).fetchone()
-        if not stored or str(stored['attempt_id']) != str(a.attempt_id) or any(stored[k] != value for k, value in e.model_dump().items() if k != 'event_id'):
+        # Compare float8 values inside PostgreSQL: text output can be rounded by
+        # extra_float_digits (including settings on pooled connections).
+        stored = c.execute('''select *,
+            song_time_sec is not distinct from %s::double precision as song_time_matches,
+            elapsed_playing_sec is not distinct from %s::double precision as elapsed_matches
+            from public.student_attempt_events where event_id=%s''',
+            (e.song_time_sec, e.elapsed_playing_sec, e.event_id)).fetchone()
+        differences = ['event_id_or_sequence'] if not stored else [
+            k for k, value in e.model_dump().items()
+            if k not in ('event_id', 'song_time_sec', 'elapsed_playing_sec') and stored[k] != value
+        ]
+        if stored:
+            if str(stored['attempt_id']) != str(a.attempt_id): differences.append('attempt_id')
+            if not stored['song_time_matches']: differences.append('song_time_sec')
+            if not stored['elapsed_matches']: differences.append('elapsed_playing_sec')
+        if differences:
+            logging.getLogger(__name__).warning(
+                'Activity identity conflict attempt=%s event=%s fields=%s',
+                a.attempt_id, e.event_id, ','.join(differences))
             raise HTTPException(409, 'Activity event identity conflict')
     # Out-of-order delivery is allowed; the latest sequence determines state.
     last = c.execute('select event_type,occurred_at from public.student_attempt_events where attempt_id=%s order by event_sequence desc limit 1', (a.attempt_id,)).fetchone()

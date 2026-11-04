@@ -373,6 +373,10 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       }
     }
 
+    const activity = activityPacket(
+      attemptContextRef.current,
+      params.cycle.events.map(toActivityEvent),
+    )
     const inputs = await getMidiInputs()
     const midiKeyboardUsed = inputs.size > 0
 
@@ -385,7 +389,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       referenceMidiBase64: params.referenceMidiBase64,
       performanceEvents: params.performanceEvents,
       sessionId: params.sessionId,
-      activity: activityPacket(attemptContextRef.current, params.cycle.events.map(toActivityEvent)),
+      activity,
       practiceSettings: {
         // `range` remains the compatibility field consumed by existing workers.
         // Both range fields make it explicit that reference.mid is only the part
@@ -417,7 +421,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       return null
     }
 
-    showToast('Recording saved.')
+    showToast('Saved on this device. Syncing in background.')
     return result.id
   }
 
@@ -518,7 +522,9 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     }
   }
 
-  /** Uploads the sealed recording and atomically commits the buffered cycle on the backend. */
+  const localSavePromiseRef = useRef<Promise<boolean> | null>(null)
+
+  /** Seals the recording locally; the application upload queue owns remote delivery. */
   const finalizeSession = async (
     eventType: Extract<PlayEventType, 'exited' | 'finished'>,
     terminal: TerminalContext,
@@ -556,6 +562,15 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
   }
 
   const handleExitChallenge = (reason: 'back_button' | 'confirm_exit') => {
+    if (terminalFlowInFlightRef.current) {
+      // A natural finish may already be sealing. Never leave before local commit.
+      void localSavePromiseRef.current
+        ?.then((saved) => {
+          if (saved && !localAlignmentLabEnabled) navigate('/')
+        })
+        .catch((error) => console.error('[Challenge] Local save failed:', error))
+      return
+    }
     const terminal = beginTerminal(nowSongSec(), { stopPlayback: true })
     if (!terminal) {
       player.stop()
@@ -570,7 +585,8 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       })
       return
     }
-    void finalizeSession('exited', terminal, { reason })
+    localSavePromiseRef.current = finalizeSession('exited', terminal, { reason })
+    void localSavePromiseRef.current
       .then((saved) => {
         if (saved) navigate('/')
       })
@@ -705,7 +721,11 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       const succeeded = isChallengeSuccess(terminal.accuracy)
       setEndModalVariant(succeeded ? 'success' : 'complete')
       setShowSuccessModal(true)
-      void finalizeSession('finished', terminal, { success: succeeded })
+      localSavePromiseRef.current = finalizeSession('finished', terminal, { success: succeeded })
+      void localSavePromiseRef.current.catch((error) => {
+        console.error('[Challenge] Local save failed:', error)
+        showToast('Recording could not be saved. Please keep this page open.')
+      })
     }
 
     previousPlayingRef.current = isPlayingNow
@@ -932,6 +952,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
 
       <ChallengeSuccessModal
         show={showSuccessModal}
+        isSaving={isFinalizing}
         onClose={() => setShowSuccessModal(false)}
         variant={endModalVariant}
       />

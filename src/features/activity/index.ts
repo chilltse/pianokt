@@ -18,7 +18,9 @@ async function sendActivity(body: Activity, accessToken = token) {
     body: JSON.stringify(body),
   })
   if (!response.ok)
-    throw Object.assign(new Error(`Activity ${response.status}`), { status: response.status })
+    throw Object.assign(new Error(`Activity ${response.status}: ${await response.text()}`), {
+      status: response.status,
+    })
 }
 
 /** Called on authentication changes, NOT on route changes. */
