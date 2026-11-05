@@ -1,5 +1,7 @@
 # 数据链路简化：实际实施记录
 
+> 历史阶段记录：本文保留当时的设计/验收信息。2026-11-04 的当前实践已升级为 migration 016、Challenge v2 单表事件与默认 Direct Export；以 [当前架构](ARCHITECTURE_ZH.md)、[数据字典](DATA_CONTRACT_V2_ZH.md) 和 [升级手册](DEPLOYMENT_AND_ROADMAP_ZH.md) 为准。
+
 日期：2026-11-03。本记录对应本地代码，不表示已经部署或完成生产切换。
 
 ## 1. 盘点结论与选择

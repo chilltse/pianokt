@@ -19,7 +19,8 @@ from .inference import DemoRecommender
 from .alignment.service import align
 from .upload_service import commit_finalization
 from .activity import Activity, save_activity
-from .upload_contracts import (Upload, Finalize, ChallengeCycle, CycleEvent, LocalAlignment, finite_number, local_alignment_lab_enabled, validate_alignment_window_settings, validate_performance_events, validate_cycle, commit_cycle)
+from .provenance import recording_environment
+from .upload_contracts import (Upload, Finalize, LocalAlignment, finite_number, local_alignment_lab_enabled, validate_alignment_window_settings, validate_performance_events, validate_finalization)
 
 app=FastAPI(title='PianoKT API',version='0.1.0')
 app.add_middleware(CORSMiddleware,allow_origins=os.getenv('FRONTEND_ORIGINS','http://localhost:5173').split(','),allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type'])
@@ -107,20 +108,16 @@ def create_attempt(body:Upload,uid=Depends(user)):
         value=body.settings.get(name)
         if value is not None and (not finite_number(value) or not 0<=value<=maximum):
             raise HTTPException(422,f'Invalid {name}')
+    environment = recording_environment()
     with connect() as c:
-        if body.activity is not None:
-            context=body.activity.attempt
-            if context is None or context.attempt_id != body.attempt_id or context.song_id != body.song_id or context.song_source != body.song_source:
-                raise HTTPException(422,'Upload does not match activity context')
-            save_activity(c,uid,body.activity)
         c.execute('insert into public.piano_learner_keys(user_id) values(%s) on conflict do nothing',(uid,))
         learner=c.execute('select learner_key from public.piano_learner_keys where user_id=%s',(uid,)).fetchone()['learner_key']
         prefix=f'midi/{learner}/{body.attempt_id}'
         events_key=prefix+'/performance-events.json' if body.performance_events_hash else None
-        c.execute('''insert into public.piano_attempts(id,user_id,learner_key,song_id,song_source,song_title,metadata,performance_key,reference_key,performance_events_key,performance_hash,reference_hash,performance_events_hash,performance_events_count)
-            values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict(id) do nothing''',(body.attempt_id,uid,learner,body.song_id,body.song_source,body.song_title,Jsonb(body.model_dump(mode='json',exclude={'activity'})),prefix+'/performance.mid',prefix+'/reference.mid',events_key,body.performance_hash,body.reference_hash,body.performance_events_hash,body.performance_events_count))
+        c.execute('''insert into public.piano_attempts(id,user_id,learner_key,song_id,song_source,song_title,metadata,performance_key,reference_key,performance_events_key,performance_hash,reference_hash,performance_events_hash,performance_events_count,source_environment)
+            values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict(id) do nothing''',(body.attempt_id,uid,learner,body.song_id,body.song_source,body.song_title,Jsonb(body.model_dump(mode='json')),prefix+'/performance.mid',prefix+'/reference.mid',events_key,body.performance_hash,body.reference_hash,body.performance_events_hash,body.performance_events_count,environment))
         row=owned_attempt(c,body.attempt_id,uid)
-        if not row or row['metadata']!=body.model_dump(mode='json',exclude={'activity'}): raise HTTPException(409,'Attempt identity conflict')
+        if not row or row['source_environment']!=environment or row['metadata']!=body.model_dump(mode='json'): raise HTTPException(409,'Attempt identity conflict')
     response=dict(attempt_id=str(body.attempt_id),performance_url=signed(row['performance_key'],'PUT'),reference_url=signed(row['reference_key'],'PUT'))
     if row['performance_events_key']:
         response['performance_events_url']=signed(row['performance_events_key'],'PUT','application/json')
@@ -151,9 +148,9 @@ def finalize(attempt_id:uuid.UUID,body:Finalize,uid=Depends(user)):
         if digest(data)!=row['performance_events_hash']: raise HTTPException(409,'Performance event digest mismatch')
         try: validate_performance_events(json.loads(data),row['performance_events_count'])
         except json.JSONDecodeError as exc: raise HTTPException(422,'Invalid performance event telemetry JSON') from exc
-    timestamps=validate_cycle(row,body.cycle)
+    validate_finalization(row,body,uid)
     with connect() as c:
-        commit_finalization(c,row,uid,body,timestamps)
+        commit_finalization(c,row,uid,body)
     return {'id':str(attempt_id)}
 
 @app.get('/attempts/{attempt_id}')
@@ -175,7 +172,7 @@ def download(attempt_id:uuid.UUID,kind:str='performance',uid=Depends(user)):
 def recommendations(uid=Depends(user)):
     model=DemoRecommender()
     with connect() as c:
-        history=c.execute("select p.id,p.summary,p.alignment_run_id,p.result_key from public.piano_attempts p left join public.student_attempts a on a.attempt_id=p.id where p.user_id=%s and p.status='READY' and p.summary->>'alignment_quality_valid'='true' order by coalesce(a.started_at,p.created_at) desc,p.id desc limit 3",(uid,)).fetchall()[::-1]
+        history=c.execute("select p.id,p.summary,p.alignment_run_id,p.result_key from public.piano_attempts p left join public.student_attempts a on a.attempt_id=p.id where p.user_id=%s and p.source_environment=%s and p.status='READY' and p.summary->>'alignment_quality_valid'='true' order by coalesce(a.started_at,p.created_at) desc,p.id desc limit 3",(uid,recording_environment())).fetchall()[::-1]
         pref=c.execute('select genres from public.piano_preferences where user_id=%s',(uid,)).fetchone()
         catalog=c.execute('select song_id,title,difficulty,genres from public.piano_song_catalog where enabled').fetchall()
     for attempt in history:

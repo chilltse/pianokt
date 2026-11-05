@@ -52,14 +52,14 @@ export async function runLocalAlignment(params: {
   return response.json() as Promise<Record<string, unknown>>
 }
 export type RecordingUpload = {
+  schemaVersion: 2
   songSource: string
   songId: string
   songTitle: string | null
   durationSec: number
   midiBase64: string
   referenceMidiBase64: string
-  sessionId?: string
-  activity?: Activity
+  activity: Activity
   practiceSettings?: Record<string, unknown>
   accuracyPct?: number
   difficulty?: number
@@ -84,17 +84,8 @@ export type RecordingUpload = {
       performanceNowTimestamp: number
     }>
   }
-  cycle: {
-    sessionId: string
-    events: Array<{
-      eventId: string
-      eventType: 'play_started' | 'paused' | 'resumed' | 'finished' | 'exited'
-      songTimeSec: number
-      clientTs: string
-      metadata: Record<string, unknown>
-    }>
-  }
 }
+
 function decode(s: string) {
   return Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
 }
@@ -126,6 +117,7 @@ async function uploadSealedRecording(
     }>(
       '/attempts',
       {
+        schema_version: 2,
         attempt_id: attemptId,
         song_id: params.songId,
         song_source: params.songSource,
@@ -133,8 +125,6 @@ async function uploadSealedRecording(
         duration_sec: params.durationSec,
         performance_hash: performanceHash,
         reference_hash: referenceHash,
-        session_id: params.sessionId ?? null,
-        activity: params.activity,
         settings: {
           ...params.practiceSettings,
           client_accuracy_pct: params.accuracyPct,
@@ -174,18 +164,7 @@ async function uploadSealedRecording(
     }
     const result = await backendRequest<{ id: string }>(
       `/attempts/${attemptId}/finalize`,
-      {
-        cycle: {
-          session_id: params.cycle.sessionId,
-          events: params.cycle.events.map((event) => ({
-            event_id: event.eventId,
-            event_type: event.eventType,
-            song_time_sec: event.songTimeSec,
-            client_ts: event.clientTs,
-            metadata: event.metadata,
-          })),
-        },
-      },
+      { schema_version: 2, activity: params.activity },
       ownerId,
     )
     return result
@@ -219,10 +198,10 @@ export async function saveGcsRecording(
   params: RecordingUpload,
 ): Promise<{ id: string } | { error: string }> {
   try {
-    const ownerId =
-      params.activity?.owner_id ?? (await supabase?.auth.getSession())?.data.session?.user.id
+    const ownerId = params.activity.owner_id
     if (!ownerId) throw new Error('Not authenticated')
-    const id = params.activity?.attempt?.attempt_id ?? params.cycle.sessionId
+    const id = params.activity.attempt?.attempt_id
+    if (!id || params.schemaVersion !== 2) throw new Error('Challenge v2 context is required')
     // Serialization seals values, including telemetry and the final event sequence.
     const payload = JSON.parse(JSON.stringify(params)) as RecordingUpload
     const record = { id, ownerId, payload }

@@ -8,8 +8,6 @@ import { backendRequest } from './gcs'
 
 const BUCKET = 'challenge-recordings'
 
-export { logPlayEvent, finalizeUserPlayLog } from './legacy-events'
-
 export { saveGcsRecording as saveChallengeRecording } from './gcs'
 
 export type LeaderboardSortBy = 'challenges' | 'accuracy' | 'difficulty'

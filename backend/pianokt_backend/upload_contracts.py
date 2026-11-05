@@ -4,12 +4,14 @@ import math
 import uuid
 from datetime import datetime, timezone
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, AwareDatetime
-from psycopg.types.json import Jsonb
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Literal
 from .activity import Activity
 import os
 
 class Upload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version:Literal[2]
     attempt_id:uuid.UUID
     song_id:str=Field(min_length=1,max_length=300)
     song_source:str=Field(max_length=50)
@@ -17,25 +19,14 @@ class Upload(BaseModel):
     performance_hash:str=Field(pattern=r'^[0-9a-f]{64}$')
     reference_hash:str=Field(pattern=r'^[0-9a-f]{64}$')
     duration_sec:float=Field(gt=0,le=14400)
-    session_id:uuid.UUID|None=None
-    activity:Activity|None=None
     settings:dict=Field(default_factory=dict)
     performance_events_hash:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
     performance_events_count:int|None=Field(default=None,ge=0,le=50000)
 
-class CycleEvent(BaseModel):
-    event_id:uuid.UUID
-    event_type:str=Field(pattern='^(play_started|paused|resumed|finished|exited)$')
-    song_time_sec:float=Field(ge=0,le=14400)
-    client_ts:AwareDatetime
-    metadata:dict=Field(default_factory=dict)
-
-class ChallengeCycle(BaseModel):
-    session_id:uuid.UUID
-    events:list[CycleEvent]=Field(min_length=2,max_length=1000)
-
 class Finalize(BaseModel):
-    cycle:ChallengeCycle
+    model_config = ConfigDict(extra="forbid")
+    schema_version:Literal[2]
+    activity:Activity
 
 class LocalAlignment(BaseModel):
     performance_midi_base64:str=Field(min_length=1,max_length=12_000_000)
@@ -172,69 +163,41 @@ def validate_performance_events(data,expected_count):
         raise HTTPException(422,'Transport cycle must start and end with stop')
     return data
 
-def validate_cycle(row,cycle):
-    session_id=row['metadata'].get('session_id')
-    if not session_id or str(cycle.session_id)!=str(session_id):
-        raise HTTPException(409,'Session does not match attempt')
-    event_types=[event.event_type for event in cycle.events]
-    if event_types[0]!='play_started' or event_types[-1] not in ('finished','exited'):
-        raise HTTPException(422,'Cycle must start with play_started and end with finished or exited')
-    if any(event_type in ('play_started','finished','exited') for event_type in event_types[1:-1]):
-        raise HTTPException(422,'Cycle contains an invalid terminal or duplicate start event')
-    if len({event.event_id for event in cycle.events})!=len(cycle.events):
-        raise HTTPException(422,'Cycle event IDs must be unique')
-    state='active'
-    for event in cycle.events[1:]:
-        if event.event_type=='paused':
-            if state!='active': raise HTTPException(422,'Pause requires active playback')
-            state='paused'
-        elif event.event_type=='resumed':
-            if state!='paused': raise HTTPException(422,'Resume requires paused playback')
-            state='active'
-    if any(a.song_time_sec>b.song_time_sec for a,b in zip(cycle.events,cycle.events[1:])):
-        raise HTTPException(422,'Cycle song position is not monotonic')
-    timestamps=[]
-    for event in cycle.events:
-        timestamp=event.client_ts
-        if timestamp.tzinfo is None: timestamp=timestamp.replace(tzinfo=timezone.utc)
-        timestamps.append(timestamp)
-        if len(json.dumps(event.metadata))>16000: raise HTTPException(422,'Event metadata too large')
-    if timestamps!=sorted(timestamps): raise HTTPException(422,'Cycle events are not chronological')
-    return timestamps
-
-def commit_cycle(c,row,uid,cycle,timestamps):
-    """Write the user-visible challenge cycle inside the finalize transaction."""
-    c.execute('select pg_advisory_xact_lock(hashtext(%s))',(str(cycle.session_id),))
-    existing=c.execute('select user_id,challenge_recording_id from public.user_play_logs where session_id=%s for update',(cycle.session_id,)).fetchone()
-    if existing and str(existing['user_id'])!=str(uid): raise HTTPException(409,'Cycle ownership conflict')
-    if existing and existing['challenge_recording_id'] and str(existing['challenge_recording_id'])!=str(row['id']): raise HTTPException(409,'Cycle already belongs to another recording')
-    for event in cycle.events:
-        c.execute('''insert into public.play_events_raw(event_id,session_id,user_id,song_id,exercise_id,play_mode,event_type,song_time_sec,client_ts,metadata)
-            values(%s,%s,%s,%s,%s,'challenge',%s,%s,%s,%s) on conflict(event_id) do nothing''',
-            (event.event_id,cycle.session_id,uid,row['song_id'],f"challenge:{row['song_id']}",event.event_type,event.song_time_sec,event.client_ts,Jsonb(event.metadata)))
-        saved=c.execute('select *, song_time_sec is not distinct from %s::double precision as song_time_matches from public.play_events_raw where event_id=%s',(event.song_time_sec,event.event_id)).fetchone()
-        if not saved or str(saved['user_id'])!=str(uid) or str(saved['session_id'])!=str(cycle.session_id) or saved['event_type']!=event.event_type or saved['client_ts']!=event.client_ts or not saved['song_time_matches'] or saved['metadata']!=event.metadata:
-            raise HTTPException(409,'Cycle event identity conflict')
-    context=c.execute('select started_at from public.student_attempts where attempt_id=%s and user_id=%s',(row['id'],uid)).fetchone()
-    if context and context['started_at']!=timestamps[0]:
-        raise HTTPException(409,'Finalized cycle start differs from attempt context')
-    if context:
-        count=c.execute('select count(*) as n from public.student_attempt_events where attempt_id=%s',(row['id'],)).fetchone()['n']
-        if int(count)!=len(cycle.events): raise HTTPException(409,'Finalized cycle omits recorded activity')
-        for index,event in enumerate(cycle.events):
-            saved=c.execute('select *, song_time_sec is not distinct from %s::double precision as song_time_matches from public.student_attempt_events where event_id=%s and attempt_id=%s',(event.song_time_sec,event.event_id,row['id'])).fetchone()
-            if not saved or saved['event_sequence']!=index or saved['event_type']!=event.event_type or saved['occurred_at']!=timestamps[index] or not saved['song_time_matches'] or saved['metadata']!=event.metadata:
-                raise HTTPException(409,'Finalized cycle differs from recorded activity')
-    terminal=cycle.events[-1]
-    terminal_metadata=terminal.metadata
-    time_playing=terminal_metadata.get('time_playing_sec',terminal.song_time_sec)
-    if not finite_number(time_playing) or not 0<=time_playing<=14400:
-        raise HTTPException(422,'Invalid terminal time_playing_sec')
-    success=terminal_metadata.get('success') is True
-    exit_status='abandoned' if terminal.event_type=='exited' else ('succeeded' if success else 'failed')
-    completed=terminal.event_type=='finished'
-    c.execute('''insert into public.user_play_logs(session_id,user_id,song_id,exercise_id,play_mode,days_since_signup,time_playing,song_time_sec,challenge_recording_id,is_played_in_full,exit_status,started_at,ended_at,events_count)
-        values(%s,%s,%s,%s,'challenge',(extract(epoch from (%s::timestamptz-public.piano_registration_time(%s)))/86400.0),%s,%s,%s,%s,%s,%s,%s,%s)
-        on conflict(session_id) do update set started_at=excluded.started_at,days_since_signup=excluded.days_since_signup,time_playing=excluded.time_playing,song_time_sec=excluded.song_time_sec,challenge_recording_id=excluded.challenge_recording_id,is_played_in_full=excluded.is_played_in_full,exit_status=excluded.exit_status,ended_at=excluded.ended_at,events_count=excluded.events_count,updated_at=now()''',
-        (cycle.session_id,uid,row['song_id'],f"challenge:{row['song_id']}",timestamps[0],uid,float(time_playing),terminal.song_time_sec,row['id'],completed,exit_status,timestamps[0],timestamps[-1],len(cycle.events)))
-
+def validate_finalization(row, body, uid):
+    """One event contract for live activity and immutable finalization."""
+    activity = body.activity
+    context = activity.attempt
+    if str(activity.owner_id) != str(uid):
+        raise HTTPException(403, 'Activity belongs to another signed-in user')
+    if context is None or str(context.attempt_id) != str(row['id']) or context.song_id != row['song_id'] or context.song_source != row['song_source']:
+        raise HTTPException(422, 'Finalization does not match attempt context')
+    events = activity.events
+    if len(events) < 2 or events[0].event_type != 'play_started' or events[-1].event_type not in ('finished', 'exited'):
+        raise HTTPException(422, 'Cycle must start with play_started and end with finished or exited')
+    if events[0].occurred_at != context.started_at:
+        raise HTTPException(422, 'Start event must match attempt started_at')
+    if len({e.event_id for e in events}) != len(events):
+        raise HTTPException(422, 'Cycle event IDs must be unique')
+    state = 'active'
+    for index, event in enumerate(events):
+        if event.event_sequence != index:
+            raise HTTPException(422, 'Cycle event sequence must be contiguous from zero')
+        if len(json.dumps(event.metadata)) > 16000:
+            raise HTTPException(422, 'Event metadata too large')
+        if 0 < index < len(events)-1:
+            if event.event_type == 'paused':
+                if state != 'active': raise HTTPException(422, 'Pause requires active playback')
+                state = 'paused'
+            elif event.event_type == 'resumed':
+                if state != 'paused': raise HTTPException(422, 'Resume requires paused playback')
+                state = 'active'
+            else:
+                raise HTTPException(422, 'Cycle contains an invalid intermediate event')
+    for previous, current in zip(events, events[1:]):
+        if previous.song_time_sec > current.song_time_sec:
+            raise HTTPException(422, 'Cycle song position is not monotonic')
+        if previous.elapsed_playing_sec > current.elapsed_playing_sec:
+            raise HTTPException(422, 'Cycle elapsed playing time is not monotonic')
+        if previous.occurred_at > current.occurred_at:
+            raise HTTPException(422, 'Cycle events are not chronological')
+    return events

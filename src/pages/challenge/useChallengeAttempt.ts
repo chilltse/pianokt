@@ -36,6 +36,7 @@ export function useChallengeAttempt(options: {
         'play_started' | 'paused' | 'resumed' | 'finished' | 'exited'
       >
       songTimeSec: number
+      elapsedPlayingSec: number
       clientTs: string
       metadata: Record<string, unknown>
     }>
@@ -102,10 +103,10 @@ export function useChallengeAttempt(options: {
       eventType,
       songTimeSec: songTimeSecOverride ?? options.songTime(),
       clientTs,
+      elapsedPlayingSec: Number(getTimePlayingSec().toFixed(3)),
       metadata: {
         source: options.source,
         song_duration_sec: options.songDuration(),
-        time_playing_sec: Number(getTimePlayingSec().toFixed(3)),
         difficulty: options.difficulty,
         ...metadata,
       },
@@ -126,7 +127,7 @@ export function useChallengeAttempt(options: {
     event_type: event.eventType,
     occurred_at: event.clientTs,
     song_time_sec: event.songTimeSec,
-    elapsed_playing_sec: Number(event.metadata.time_playing_sec ?? 0),
+    elapsed_playing_sec: event.elapsedPlayingSec,
     metadata: event.metadata,
   })
 

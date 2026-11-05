@@ -2,6 +2,7 @@ import { ActivityTracker, type Activity, type ActivityEvent, type AttemptContext
 
 export type { Activity, ActivityEvent, AttemptContext } from './tracker'
 const apiRoot = (import.meta.env.VITE_PIANOKT_API_URL as string | undefined)?.replace(/\/$/, '')
+const localLab = import.meta.env.DEV && import.meta.env.VITE_LOCAL_ALIGNMENT_LAB === 'true'
 const openedAt = new Date().toISOString()
 let tracker: ActivityTracker | null = null
 let token: string | null = null
@@ -28,7 +29,7 @@ export function setActivitySession(
   session: { user: { id: string }; access_token: string } | null,
   forceNewVisit = false,
 ) {
-  if (typeof window === 'undefined') return
+  if (typeof window === 'undefined' || localLab) return
   if (!forceNewVisit && tracker?.userId === session?.user.id) {
     token = session?.access_token ?? null
     return

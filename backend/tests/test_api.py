@@ -99,14 +99,22 @@ def test_alignment_window_settings_rejects_an_end_before_origin():
 
 
 def test_cycle_timezone_and_pause_state():
-    from pianokt_backend.upload_contracts import ChallengeCycle,validate_cycle
+    from pianokt_backend.upload_contracts import Finalize, validate_finalization
     from pydantic import ValidationError
+    from test_activity import full_packet, A, U
+    body=full_packet()
+    middle=body.activity.events[-1].model_copy(deep=True)
     from uuid import uuid4
-    sid=str(uuid4())
-    def event(kind,time):
-        return dict(event_id=str(uuid4()),event_type=kind,song_time_sec=0,client_ts=time)
-    events=[event('play_started','2026-01-01T00:00:00Z'),event('resumed','2026-01-01T00:00:01Z'),event('exited','2026-01-01T00:00:02Z')]
-    cycle=ChallengeCycle(session_id=sid,events=events)
-    with pytest.raises(HTTPException,match='Resume requires'): validate_cycle({'metadata':{'session_id':sid}},cycle)
-    events[0]['client_ts']='2026-01-01T00:00:00'
-    with pytest.raises(ValidationError): ChallengeCycle(session_id=sid,events=events)
+    middle.event_id=uuid4(); middle.event_type='resumed'
+    body.activity.events.insert(1,middle)
+    for i,event in enumerate(body.activity.events): event.event_sequence=i
+    row={'id':A,'song_id':'song','song_source':'builtin'}
+    with pytest.raises(HTTPException,match='Resume requires'): validate_finalization(row,body,U)
+    value=body.model_dump(mode='json'); value['activity']['events'][0]['occurred_at']='2026-01-01T00:00:00'
+    with pytest.raises(ValidationError): Finalize.model_validate(value)
+
+
+def test_v1_upload_contract_is_explicitly_rejected():
+    from pianokt_backend.upload_contracts import Finalize
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError): Finalize.model_validate({'cycle':{'events':[]}})

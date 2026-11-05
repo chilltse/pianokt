@@ -13,6 +13,8 @@ try {
       .replaceAll("'./tracker.ts'", "'./tracker.js'")
       .replaceAll("'./tracker'", "'./tracker.js'")
       .replaceAll("'./index.ts'", "'./index.js'")
+      .replaceAll('import.meta.env.DEV', 'false')
+      .replaceAll('import.meta.env.VITE_LOCAL_ALIGNMENT_LAB', '"false"')
       .replaceAll('import.meta.env.VITE_PIANOKT_API_URL', '"https://activity.test"')
     await writeFile(
       join(dir, `${name}.js`),

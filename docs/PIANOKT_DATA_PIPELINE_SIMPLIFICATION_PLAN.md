@@ -1,5 +1,7 @@
 # PianoKT Data Pipeline 精简改造手顺（V1）
 
+> 历史阶段记录：本文保留当时的设计/验收信息。2026-11-04 的当前实践已升级为 migration 016、Challenge v2 单表事件与默认 Direct Export；以 [当前架构](ARCHITECTURE_ZH.md)、[数据字典](DATA_CONTRACT_V2_ZH.md) 和 [升级手册](DEPLOYMENT_AND_ROADMAP_ZH.md) 为准。
+
 > 目标：**保留在线链路的可靠性，取消训练数据导出对定时 Spark / Delta Bronze–Silver–Gold 物化的强依赖**。先并行验证、再切换，最后才考虑停用旧组件。
 >
 > 依据：`REFACTOR_AND_DATA_INTEGRITY_ZH.md`（2026-11-03）及现有 GCP 部署说明。**这是分阶段计划。代码层面的 direct 路径已实现，默认仍为 lake；staging、训练消费切换和停调度尚未完成。逐项实际状态见 [实施记录](DATA_PIPELINE_SIMPLIFICATION_IMPLEMENTATION_ZH.md)。复选框保留为完整验收要求，不能把本地实现等同云端验收。**

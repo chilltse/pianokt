@@ -9,7 +9,7 @@ export interface UploadStore<T> {
 }
 
 export function indexedUploadStore<T>(): UploadStore<T> {
-  const store = createStore('pianokt-upload-recovery', 'bundles')
+  const store = createStore('pianokt-upload-recovery-v2', 'bundles')
   return {
     seal(record) {
       return update(

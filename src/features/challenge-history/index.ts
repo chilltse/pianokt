@@ -5,8 +5,6 @@ export {
   fetchLeaderboard,
   getBestAccuracyPerSong,
   isChallengeSuccess,
-  logPlayEvent,
-  finalizeUserPlayLog,
   listUserPlayLogs,
 } from './api'
 export type {

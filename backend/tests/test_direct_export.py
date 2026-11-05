@@ -22,7 +22,7 @@ def setup(tmp_path):
                  matcher_version='test-v3', config={'version':'test-v3'},
                  summary={'alignment_quality_valid':r['alignment_quality_valid']})
         direct_store.json(key, r)
-        rows.append(dict(attempt_id=r['attempt_id'], learner_key='learner',
+        rows.append(dict(source_environment='production',attempt_id=r['attempt_id'], learner_key='learner',
                          alignment_run_id=r['alignment_run_id'], result_key=key,
                          reference_hash='score', performance_hash='performance',
                          result_digest=digest(direct_store.read(key)),

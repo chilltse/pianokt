@@ -1,197 +1,78 @@
-# PianoKT 当前工程架构：从网页练习到训练数据
+# PianoKT 当前工程架构
 
-更新日期：2026-11-03。按当前工作区代码整理，数据库结构以 migration 015 为止。这里描述代码已经实现的行为；实际云端是否已部署相同版本，需要另外核对。
+更新：2026-11-04；代码与 migration 016。云端需按部署手册应用迁移和发布。完整字段见 [数据字典](DATA_CONTRACT_V2_ZH.md)，实施决策见 [v2 精简结果](pianokt_data_architecture_simplification_plan.md)。
 
-## 1. 先用一段话理解整个项目
+## 1. 系统分工
 
-PianoKT 首先是一个在浏览器里运行的钢琴练习网站：浏览器负责读乐谱、接收琴键、播放声音、显示谱面和即时反馈。学生完成一次 Challenge 后，网站保存这次演奏，后端把“应该弹什么”和“实际弹了什么”进行对齐，产生逐音符结果。之后，可以按需直接从数据库已提交结果与 GCS 导出训练数据，无需先入湖。旧湖仓路径仍保留作为分析和并行验收基线，默认导出路径暂未切换。推荐入口已经接通，目前采用演示规则。
+浏览器负责乐谱、播放、MIDI 输入与即时反馈。PostgreSQL 负责身份、低频行为事件、上传处理状态及产品查询。GCS 保存不可变媒体、遥测和对齐结果。Worker 负责异步评分。正式训练文件默认从 PostgreSQL READY 提交指针 + GCS Result 直接导出；Lake/Spark 是显式启用的分析路径。
 
-可以把它理解成六个分工明确的部分：
+在线上传仅用于 Challenge；Freeplay/Training 页面存在不意味着它们都要上传云端演奏。
 
-1. **网页练习端**：让学生看谱、弹奏、暂停、继续和结束。
-2. **在线数据库**：记录谁访问了网站、何时练习、录音是否保存、处理到哪一步。
-3. **文件存储**：保存 MIDI、按键时间记录和完整对齐结果。
-4. **对齐后台**：判断每个目标音是正确、漏音、错音还是节奏有误。
-5. **可选的旧湖仓路径**：把原始结果整理成便于查询的历史明细与统计表。
-6. **数据集导出**：选择可信结果，固定版本，生成训练文件。
+## 2. 主链路
 
-## 2. 全局关系图
+1. 登录后创建/恢复 Visit，Activity tracker 持久化低频心跳和事件；本地 Alignment Lab 不启动该 tracker。
+2. 实际播放开始建立 Attempt，记录 play_started。倒数不计入录音；暂停/继续记录相同字段契约的事件。刷新或意外离开记录 interrupted。
+3. 正常结束或主动退出后，先将 owner、完整 Activity、MIDI、参考快照、遥测和设置封存到 IndexedDB v2。
+4. POST `/attempts` 登记文件摘要，得到 GCS create-only 签名 URL；创建状态为 CREATED。此接口不写演奏事件。
+5. 浏览器 PUT performance.mid、reference.mid、performance-events.json。412 只代表对象存在，最终仍由服务端核验摘要。
+6. POST `/attempts/{id}/finalize` 提交 `{schema_version:2, activity}`。服务端验证文件、时间轴和完整事件序列，在同一事务调用 Activity 幂等写入、封存、设置 UPLOADED、生成投影和 performance.uploaded outbox。
+7. Relay 至少一次投递 Pub/Sub；私有 Worker 通过租约领取任务、核验原始证据、创建不可变 Result，然后原子提交 READY、result_digest/result_committed_at、正式分数和 alignment.completed outbox。
+8. Direct Export 在一个短 repeatable-read 事务内取得同环境上下文和 READY 指针；离开事务后读取 GCS、验证摘要和身份、应用质量门，最后发布不可变数据集。
 
-```mermaid
-flowchart TD
-  Browser["浏览器：React 页面、播放器、MIDI、即时反馈"]
-  Auth["Supabase Auth：登录身份"]
-  API["FastAPI：身份校验、活动记录、上传与最终提交"]
-  DB[("Supabase PostgreSQL：访问、演奏、状态、outbox")]
-  Raw[("私有 GCS raw：MIDI、按键记录、对齐 JSON、事件归档")]
-  Relay["relay：投递待发事件"]
-  Bus["Pub/Sub：任务通知与事件归档"]
-  Worker["私有 worker：异步对齐与评分"]
-  Pipeline["pipeline：整理对齐结果与事件"]
-  Lake[("Delta 湖仓：Bronze / Silver / Gold")]
-  Export["export-attempts / export-training"]
-  Dataset["固定版本的训练文件"]
+## 3. 事实、状态与投影
 
-  Browser --> Auth
-  Browser --> API
-  API --> DB
-  API -->|返回临时上传地址| Browser
-  Browser -->|直接上传文件| Raw
-  DB --> Relay
-  Relay --> Bus
-  Bus -->|仅上传完成通知| Worker
-  Bus -->|归档所有已投递事件| Raw
-  Worker -->|读取输入、写入结果| Raw
-  Worker -->|处理状态、正式分数、完成事件| DB
-  Raw --> Pipeline
-  Pipeline --> Lake
-  DB -->|时间线；source=direct 固定 READY 指针与摘要| Export
-  Raw -->|完整对齐结果| Export
-  Lake -.->|仅 source=lake 的完成标记| Export
-  Export --> Dataset
-```
+- `student_visits`：访问事实与暂定在线状态。
+- `student_attempts`：每一次开始演奏，即使没有录音；结束状态是事件派生值，sealed 字段标记最终封存。
+- `student_attempt_events`：唯一生命周期事件权威表，sequence 在 Attempt 内唯一。
+- `piano_attempts`：上传/处理状态、文件 Hash/Key、完整 finalization 身份、当前结果提交指针。
+- `piano_learner_keys`：账号到研究假名的映射。
+- `challenge_recordings`：录音列表和分数投影；客户端分数单独保留，正式分数来自 Worker。
+- `user_play_logs`：最终周期汇总投影；主键 session_id 等于 v2 attempt_id。
+- `piano_outbox`：事务消息；不再为新 Challenge 重复发逐条 practice.event。
+- `play_events_raw`：退役的只读历史，旧客户端写 RPC 已关闭。
 
-这张图里有两条时间尺度不同的链路：学生弹奏时的反馈在浏览器即时发生；服务端对齐、入湖和导出在之后执行。一次录音上传成功，不代表对齐已经完成；对齐完成，也不代表已经进入训练数据集。
+`rebuild-projections --attempt-id UUID` 从已封存 v2 finalization 和当前状态/summary 重建两张投影，不重跑算法、不追加 outbox、不更改源事件。
 
-直接导出通过显式参数 `--source direct` 启用。省略参数仍是 `--source lake`，直到完成真实环境并行验收。两条路径使用同一排序和转换逻辑。direct 只支持当前 READY run；旧版本或缺少 migration 015 提交摘要的历史结果不会猜测补齐。详见 [实际变更与验收](DATA_PIPELINE_SIMPLIFICATION_IMPLEMENTATION_ZH.md)。
-
-## 3. 浏览器内有哪些模块
-
-前端是 React + TypeScript，页面由 React Router 组织，播放器状态主要由 Jotai 管理。
-
-- `src/pages/`：首页、曲库、练习、Challenge、录音列表、账号和训练页面。
-- `src/features/data/`：读取内置曲目、本地文件或 base64 MIDI，获得统一的 Song 数据。
-- `src/features/parsers/`：乐谱文件与 Song 结构之间的转换工具；当前 `useSong` 入口加载 MIDI。
-- `src/features/player/`：歌曲时间、倒数、播放、暂停、速度、手部、等待模式和即时分数。
-- `src/features/midi/`：接收 MIDI 键盘/电脑键盘输入，录制实际演奏，保存原始时间信息。
-- `src/features/SongVisualization/`、`synth/`：谱面/落键可视化和声音播放。
-- `src/features/auth/`：登录状态、白名单检查、资料同步及上传恢复启动。
-- `src/features/activity/`：整个网页访问与每次演奏的时间线。
-- `src/features/challenge-history/`：录音上传、恢复队列、历史查询和推荐调用。
-
-Challenge 页面负责把这些模块接起来。它的生命周期记录在 `useChallengeAttempt.ts`，参考乐谱快照在 `referenceSnapshot.ts`，完整录音的恢复在 `upload-queue.ts`。
-
-普通 Play、Freeplay 和训练页面仍使用前端练习能力。当前完整的“访问 → 演奏 → 上传 → 对齐 → attempt 数据集”采集接在 **Challenge**，不能把其他页面自动算作同样完整的数据来源。
-
-## 4. visit、attempt、alignment run 分别是什么
-
-活动记录绑定已认证用户；未登录或未配置活动 API 时，不会自动形成完整的学生研究时间线。
-
-**visit 是一次网页访问窗口。** 学生在一个标签页里浏览主页、看排名、换曲和练习，仍属于同一个 visit。刷新延续 visit；重新打开、另开标签页或离开其他网页后返回，建立新 visit。切后台本身不结束 visit。
-
-**attempt 是一次实际演奏。** 它从倒数结束、乐谱真正开始播放时开始。暂停和继续属于同一个 attempt；完成、主动退出或中断结束这次演奏。一个 visit 可以有多个 attempt。
-
-**alignment run 是对某次演奏的一次算法处理版本。** 同一 attempt 用不同配置或算法处理，可以有不同 run。输入摘要、算法配置、matcher 版本和时间上下文共同决定 run ID。
-
-例子：同一个学生打开网站，看了一次排名，弹曲 A，暂停后继续，然后改练曲 B。
+## 4. 状态机与失败恢复
 
 ```text
-visit
-├─ 浏览主页、排名
-├─ attempt 1：曲 A，开始 → 暂停 → 继续 → 退出
-└─ attempt 2：曲 B，开始 → 完成
-
-attempt 1
-└─ alignment run：这次曲 A 的某一版对齐结果
+CREATED → UPLOADED → PROCESSING → READY
+                         └──────→ FAILED → PROCESSING
+PROCESSING 超过租约期限也可重新领取
 ```
 
-数据库中的旧 `session_id` 仍表示单次播放周期。新 Challenge 客户端把它与 attempt ID 对齐，**不要拿 visit ID 填入这个字段**。
+CREATED 的文件可能只上传一部分；UPLOADED 表示原始证据及周期已原子提交；READY 表示处理完成，不等于质量通过。失败保留文件和队列，使用相同身份重试。Worker 以 lease_token 防止失效任务覆盖新提交。
 
-## 5. 学生弹完一次，系统实际做什么
+浏览器只在 finalize 成功后删除 v2 Bundle。IndexedDB 失败时保留内存并阻止常规离页；未落盘前的断电无法恢复。浏览器关闭后不运行上传，下一次登录同一账号才恢复。
 
-1. **开始时记时间线。** `/activity` 保存 visit、attempt 及开始/暂停/继续等事件。这时即使最后没上传成功，也可能留下演奏发生过的记录。
-2. **结束时封存录音。** 浏览器得到演奏 MIDI、参考 MIDI、按键记录和终止事件。完整包先写入 IndexedDB。
-3. **申请上传。** `/attempts` 创建 CREATED 任务，返回私有 GCS 临时签名地址。
-4. **浏览器直传文件。** 正常新录音包含 `performance.mid`、`reference.mid`、`performance-events.json`。
-5. **请求最终提交。** `/finalize` 检查文件摘要、大小、事件顺序和时间线身份；在同一个数据库事务里写入录音列表、练习汇总、UPLOADED 状态及 outbox。
-6. **后台收到通知。** relay 把 outbox 发到 Pub/Sub，私有 worker 被上传完成事件触发。
-7. **对齐并保存结果。** worker 写入版本化 JSON，再把 READY、正式评分与完成 outbox 一起提交。
-8. **随后整理和导出。** pipeline 写入湖仓；导出程序按时间、质量和版本规则挑选数据。
+实时 Activity 与 finalize 使用同一个 attempt 锁和事件写入器。封存后允许相同事件重试，拒绝新增或修改；已有 interrupted 不可被 finished 包覆盖。数据库、GCS、Pub/Sub 没有跨系统事务，读取者必须以数据库 READY/UPLOADED 和数据集 Manifest 作为提交边界。
 
-上传中断时，同账号下次登录、网络恢复或定时恢复会重试已封存的录音。浏览器被强杀前尚未封存的 MIDI 不保证可恢复。
+## 5. 环境与研究语义
 
-## 6. 数据各自放在哪里
+服务端 `PIANOKT_ENV` 决定 source_environment，未设置视为 development。旧记录 unknown，不自动晋升 production。正式榜单和默认导出仅纳入 production。导出在环境筛选后再分配 Visit/Attempt 序号，在质量筛选前保留真实演奏次数。
 
-**Supabase PostgreSQL 存“身份、时间线与业务状态”。**
+完成方式、客户端成功判定、对齐分数、训练资格是四种不同信息。`user_play_logs.exit_status` 保持客户端语义；正式分数只读 `score_source=aligned`；训练另需质量通过且非 waiting。
 
-- `student_visits`：访问开始、最后在线、结束与结束是否推断。
-- `student_attempts`：演奏的真实开始/结束、所属 visit、歌曲与访问内顺序。
-- `student_attempt_events`：暂停、继续、退出等节点及歌曲位置。
-- `piano_attempts`：上传文件指针、摘要、任务状态、对齐结果指针、租约。
-- `challenge_recordings`、`user_play_logs`：录音列表与一次播放的汇总。
-- `piano_outbox`：必须可靠投递的业务事件。
-- learner key、推荐目录、偏好和推荐反馈等辅助表。
+数据集 v1.3 保存环境及上下文快照。可复现的是已发布产物，不是任意未来时刻按相同 Cutoff 重查可变数据库。Direct 不提供历史 READY 指针时光回溯。
 
-**GCS raw 存“原始证据和完整结果”。** 两份 MIDI、按键/transport 记录、matching 中间数据、完整对齐 JSON、Pub/Sub 事件归档都在这里。
+## 6. 可选 Lake 与文件
 
-**Delta lake 存“便于分析的整理结果”。** Bronze 保留来源，Silver 整理明细，Gold 保存质量通过的逐音符、逐 onset 和逐 run 统计。
+GCS raw 保存 MIDI、按键侧车、matching/result JSON、Pub/Sub 事件归档以及导出文件。Result v3 当前仍内嵌遥测；不存在本轮已实现的“只留引用”格式。
 
-**导出目录存“一份固定训练快照”。** 主数据、访问元数据、事件时间线、关联映射及 manifest 成套保存。
+Lake 桶是 Delta/Parquet 表，checkpoint 桶保存 Spark 检查点。它们没有参与在线 finalize 或 READY 的事务。Terraform 保留资源，`lake_pipeline_paused=true` 默认单独暂停物化，`--source lake` 显式使用旧分析基线。
 
-这些数据有不同用途。网页查录音列表走在线数据库；训练导出会结合数据库上下文、raw 结果和湖仓完成标记。
+## 7. 模块边界
 
-## 7. 当前对齐器怎样判断弹得对不对
+| 模块 | 职责 |
+|---|---|
+| `src/features/activity` | Visit 生命周期、实时事件持久化与 owner 隔离 |
+| `src/pages/challenge/useChallengeAttempt.ts` | 单次演奏的事件和累计时长 |
+| `src/features/challenge-history/gcs.ts` / `upload-queue.ts` | v2 Bundle 封存、签名上传、finalize 和重试 |
+| `activity.py` / `upload_contracts.py` | 事件幂等写入、完整周期与遥测校验 |
+| `upload_service.py` / `projections.py` | 原子封存和可重建产品投影 |
+| `provenance.py` | 服务端环境来源、导出允许值 |
+| `worker.py` / `worker_api.py` | Relay、租约、对齐与 READY 提交 |
+| `pipeline/direct.py` / `attempts.py` / `training.py` | 环境筛选、提交校验、研究导出 |
+| `publication.py` | intent/files/manifest 原子发布协议 |
 
-当前入口是 `alignment/service.py:align()`，matcher 为 `time-guided-chord-monotonic-v3`。
-
-它首先把参考与演奏放到同一歌曲时间坐标：新录音优先使用按键记录中的 playerSongTime，按参考片段起点转换。然后按时间聚合和弦，在有限时间窗口内做保持先后顺序的匹配，再生成逐音符标签和逐 onset 数据。
-
-提前退出只评估实际观察到的曲段，后面的未练习曲谱不会全部被算成漏音。暂停的墙上时间也不会直接算成音乐节奏偏差。
-
-逐目标音错误码为：0 正确、1 漏音、2 错音、3 节奏错误、4 错音且节奏错误。多弹音记录在 `extra_notes`。
-
-当前生产路径没有调用 Parangonar；旧依赖和兼容工具仍可能保留在仓库。完整结果的 `schema_version=3`、事件结构 v1.1、attempt 数据集外层 v1.2，是三个不同层次的版本。
-
-## 8. 三种“分数/结果”不要混淆
-
-- **浏览器即时分数**：服务于练习交互，随演奏更新。
-- **后端正式对齐分数**：worker 根据参考与实际演奏计算，使用 `score_source='aligned'` 标识；排行榜正确率只采用这类成绩。
-- **训练标签**：导出程序还要求上下文完整、质量通过、非 waiting、截止时间与版本选择符合要求。
-
-READY 表示 worker 已保存结果；质量不通过的结果也可以 READY。应同时看 `alignment_quality_valid`。有结果但质量被拒绝时，仍保存证据供排查，不产生可信训练标签。
-
-## 9. 最终的数据集长什么样
-
-`export-attempts` 生成“一次演奏一行”的 `attempts.jsonl`，接近根目录的 `pianokt_attempt_example_v1_1.json`。文件名保留 v1_1，当前外层顺序字段采用 v1.2 约定。
-
-每行包含学生伪名、歌曲/练习身份、统计、`days_since_signup`、`visit_index`、`attempt_index` 和列式 `events_data`。
-
-- `visit_index`：这个学生的第几次访问。
-- `attempt_index`：这个学生的第几次演奏，跨 visit 排序。
-- `days_since_signup`：真实开始时间减去注册时间，单位天，可带小数。
-
-开始/结束时间、内部 ID、暂停/退出节点另放在元数据文件。顺序先按 UTC 时间排，再用稳定字段打破并列；先编号，再筛除质量不合格记录，因此允许缺号。补传旧历史可能改变新快照编号，已经发布的数据集不会被改写。
-
-`export-training` 是另一个序列化入口，输出逐 onset 的扁平样本。两个 exporter 都只导出数据，目前没有训练 AKT 或其他知识追踪模型的作业。
-
-## 10. 原子性怎样保证
-
-数据库里的一个业务动作使用同一事务：相关表与 outbox 一起成功或回滚。
-
-跨数据库、GCS、Pub/Sub 和多张 Delta 表时，使用“不可变输入 + 幂等 ID + 最后提交标记”。它们不会在物理上同一瞬间提交。正式读者遵守提交标记，就不会把写到一半的数据当作已完成数据。
-
-- 上传最终提交看数据库状态。
-- alignment 入湖看 `ops/completed_runs`。
-- Spark 事件入湖看 `ops/practice_event_commits`。
-- 数据集看最后写入的 `manifest.json`，并检查文件摘要。
-
-相同 ID 相同内容可重试；相同 ID 不同内容报错。worker 还有 lease_token 校验，防止过期任务覆盖新任务。
-
-## 11. 现在页面能看到什么
-
-录音页目前展示录音列表、MIDI 下载和演示推荐入口。API 已提供 attempt 状态与完整结果下载，页面尚未接入完整对齐状态/结果查看器。
-
-本地 Alignment Lab 可以显示实际对齐卷帘与 JSON；它是开发调试分支，不能当作正式训练数据集导出。
-
-推荐器目前为 `DemoRecommender`：读取最近有效结果、偏好与候选目录，按难度/偏好规则返回建议。`is_demo=true`，没有训练好的能力预测或学习收益预测。
-
-## 12. 接下来该看哪份文档
-
-- 想逐步理解一份演奏：[按一次练习读代码](PIANOKT_TEACHING_GUIDE_ZH.md)。
-- 想查模块、数据库、文件、接口与状态：[系统实现参考](PIANOKT_SYSTEM_REFERENCE_ZH.md)。
-- 想本地运行：[本地开发](LOCAL_DEVELOPMENT_ZH.md)；想部署：[运行与部署](DEPLOYMENT_AND_ROADMAP_ZH.md)。
-- 想查身份和权限：[登录、权限与录音](AUTH_AND_RECORDINGS.md)。
-- 想生成训练数据：[访问与数据集导出](VISITS_AND_ATTEMPT_DATASET_ZH.md)。
-- 想看最近重构、事务限制与迁移：[重构和数据完整性记录](REFACTOR_AND_DATA_INTEGRITY_ZH.md)。
-
-本页负责讲清整体；技术细节在对应专项文档。代码更改时，应同步维护实际影响的说明，不能只给过时正文加一个“以新代码为准”的提示。
+推荐仍是 DemoRecommender，未包含训练完成的 KT 模型。生产配置、数据隔离、数据库迁移和 GCS 权限需实际部署验证，不能由本地测试结果推断。

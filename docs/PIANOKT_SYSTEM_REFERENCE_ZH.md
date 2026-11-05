@@ -1,9 +1,8 @@
 # PianoKT 当前实现参考
 
-更新日期：2026-11-03。依据当前工作区源码和 migration 001–015 整理。本文件说明“代码实际如何连接”，运行与部署步骤见 [部署手册](DEPLOYMENT_AND_ROADMAP_ZH.md)。先理解整体可读 [架构总览](ARCHITECTURE_ZH.md)。
+更新日期：2026-11-04。依据当前工作区源码和 migration 001–016 整理。本文件说明“代码实际如何连接”，运行与部署步骤见 [部署手册](DEPLOYMENT_AND_ROADMAP_ZH.md)。先理解整体可读 [架构总览](ARCHITECTURE_ZH.md)。
 
-当前新增显式 `--source direct`：在同一 repeatable-read 快照内读取活动上下文与 PostgreSQL 当前 READY 指针，结束数据库事务后逐个读取 GCS、核对提交 SHA-256、身份与 schema，再复用原 exporter。它不依赖 Delta/Spark；省略参数仍走旧 `--source lake`。仅支持 migration 015 + 新 Worker 写入完整提交凭证的当前 run；历史无凭证结果明确报错，不能凭文件存在性回填。实际改动、部署和验收边界见 [简化实施记录](DATA_PIPELINE_SIMPLIFICATION_IMPLEMENTATION_ZH.md)。
-
+当前主路径为 Challenge v2 单表事件权威 + Direct Export。完整数据库字段、GCS 对象和数据流以 [v2 数据字典](DATA_CONTRACT_V2_ZH.md) 和 [架构总览](ARCHITECTURE_ZH.md) 为准。下面保留算法、模块和可选 Lake 的实现参考。升级需先执行 migration 016，再协调发布 API/Worker/前端；旧上传契约不自动转换。
 
 ## 1. 系统边界
 
@@ -36,9 +35,11 @@ src/
 │  └─ challenge-history/          上传队列、参考快照、查询、推荐
 backend/pianokt_backend/
 ├─ api.py                         浏览器业务 HTTP 入口
-├─ upload_contracts.py            上传、telemetry、cycle 模型与校验
+├─ upload_contracts.py            上传、telemetry、完整 Activity 模型与校验
 ├─ upload_service.py              最终提交的事务内业务写入
 ├─ activity.py                    visit/attempt/event 的幂等事务写入
+├─ projections.py                 产品投影生成/重建
+├─ provenance.py                  服务端环境与导出来源校验
 ├─ online.py                      PostgreSQL 连接与归属查询
 ├─ storage.py                     本地/GCS create-only 对象访问
 ├─ publication.py                 多文件数据集提交与摘要校验
@@ -104,7 +105,7 @@ infra/gcp/                        Terraform：IAM、桶、服务、队列、调�
 
 ### 4.3 两套浏览器持久化
 
-`activity/tracker.ts` 的 localStorage outbox 保存小型活动包，sessionStorage 保存当前访问上下文。服务端允许乱序到达，使用 sequence 防止旧心跳覆盖新关闭状态。非法/冲突包进入本地 rejected 区域。
+`activity/tracker.ts` 的 v2 localStorage outbox 保存小型活动包，sessionStorage 保存当前访问上下文。服务端允许乱序到达，使用 sequence 防止旧心跳覆盖新关闭状态。非法/冲突包进入本地 rejected 区域。
 
 `challenge-history/upload-queue.ts` 的 IndexedDB 保存完整录音包。一个记录绑定 owner 和 attempt ID。成功 finalize 后才删除；网络失败保留，重新登录同一账号、恢复网络、每 30 秒尝试恢复。IndexedDB 失败时保留内存副本并设置离页保护，不能保证抵抗进程强杀。
 
@@ -126,7 +127,7 @@ infra/gcp/                        Terraform：IAM、桶、服务、队列、调�
 
 `challenge_recordings.id` 在新链路中与 attempt ID 相同，提供页面录音列表。`midi_storage_path='gcs:<attempt-id>'` 是逻辑指针，下载时再请求 API 签名。
 
-`play_events_raw` 和 `user_play_logs` 以旧播放周期 session_id 关联；finalize 写入原始周期事件和一次汇总。user_play_logs.challenge_recording_id 关联录音。
+`play_events_raw` 已停止新写入，保留只读历史。finalize 只向 student_attempt_events 补齐生命周期事件；user_play_logs 是可重建投影，session_id 等于 v2 attempt_id，challenge_recording_id 关联录音。
 
 ### 5.3 辅助表
 
@@ -152,18 +153,18 @@ PUT signed telemetry URL         performance-events.json
 POST /attempts/{id}/finalize      核验完整包并最终提交
 ```
 
-`POST /attempts` 验证 settings/window/telemetry 身份，保存活动上下文、learner key 和 CREATED 任务。签名 URL 的过期时间为 10 分钟；PUT 要求 `x-goog-if-generation-match: 0`。
+`POST /attempts` 必须带 schema_version=2，只保存文件身份、learner key、CREATED 任务及服务端 source_environment，不接收 activity/session_id。PUT 签名有效 10 分钟，要求 x-goog-if-generation-match:0。
 
-finalize 验证两份 MIDI 的摘要和大小、telemetry 摘要/形状、cycle 事件顺序与数据库活动的一致性，然后由 `upload_service.commit_finalization` 在同一事务内完成：
+`POST /attempts/{id}/finalize` 提交 `{schema_version:2, activity}`，其中完整 Activity 包含 owner、Visit、Attempt 和连续事件序列。文件摘要/大小/遥测校验通过后，同一数据库事务完成：
 
-1. 锁定 attempt，检查已有 finalization 是否相同。
-2. 写 UPLOADED 与规范化 finalization。
-3. 写 challenge_recordings，初始 score_source=pending。
-4. 写 play_events_raw；数据库 trigger 同事务生成 practice.event outbox。
-5. 写 user_play_logs；完整演奏只认 finished。
-6. 写 performance.uploaded outbox。
+1. 锁定 attempt，与实时 Activity 使用同一 advisory lock。
+2. 调用 save_activity 补齐上下文与事件，严格核验已有身份；拒绝遗漏额外事件或覆盖 interrupted。
+3. 设置 student_attempts.sealed_at/sealed_event_count。
+4. 设置 piano_attempts.UPLOADED + 完整 finalization。
+5. 生成 challenge_recordings / user_play_logs 两张读模型。
+6. 写入一次 performance.uploaded outbox。
 
-任何一步失败则事务回滚。finalize 及活动追加共享 attempt 事务锁；sealed attempt 不再接受新活动 ID。相同 ID 不同内容返回冲突。
+封存后相同事件可重放；修改和新追加拒绝。原始事件浮点值在数据库内部精确比较。`rebuild-projections --attempt-id UUID` 可重建 v2 产品投影。旧 Cycle 字段不再受支持。
 
 ## 7. 后台消息与任务状态
 
@@ -281,6 +282,8 @@ Python 正式读取使用 `Tables.rows(name)` 或多表 `Tables.snapshot(names)`
 
 ## 11. 数据集导出
 
+默认 `--source direct --environment production`；Lake 必须显式 `--source lake`。环境在序号分配前过滤 Visit/Attempt/Event/Result。旧 unknown 来源不自动纳入；Manifest 1.3 固化来源与导出时上下文，不能把固定 cutoff 解释成任意未来时刻重查库都得到同一内容。Direct 仅支持当前 READY 提交指针。
+
 两个 CLI 都通过 repeatable-read 读取数据库上下文；`selection.py` 是共同选择入口。lake 依赖 completed_runs；direct 依赖快照中的当前 READY 指针与摘要，不读湖仓。UTC 排序、质量和 waiting 筛选复用。
 
 `export-attempts`：一 attempt 一行，附单独访问/时间线元数据。visit_index 按学生、UTC start、visit ID；attempt_index 按学生、UTC start、visit ID、访问内序号、attempt ID。先编号再筛选。days_since_signup 根据实际开始和注册时间计算。
@@ -313,7 +316,7 @@ attempt 数据集发布顺序是 intent → 五份数据文件 → manifest。`p
 
 私有 worker 进程提供 /health 和 POST /pubsub，其安全依赖 Cloud Run IAM。
 
-`pianokt-data` 命令包括 align、worker、relay、pipeline、spark-events、export-attempts、export-training。精确选项以 `cli.py` 和命令 `--help` 为准。
+`pianokt-data` 命令包括 align、worker、relay、pipeline、spark-events、export-attempts、export-training、rebuild-projections。精确选项以 `cli.py` 和命令 `--help` 为准。
 
 ## 14. 云资源与运行边界
 
@@ -321,13 +324,13 @@ Terraform 配置两个 Cloud Run Service：API 和 worker；两个 Cloud Run Job
 
 普通镜像运行 API/worker/relay；Spark 镜像供 pipeline 使用，包含 Java 17、Spark 4.0.1、Delta 4.0.0 与 GCS JAR。Python 镜像固定 3.13.12。
 
-调度时区 Asia/Tokyo，默认 relay 10:00/23:00，pipeline 00:00/11:00；schedules_paused 默认 true，频率可配置。上传到 READY 的等待受 relay 调度和积压影响；不能把异步通道描述成毫秒级服务端反馈。
+调度时区 Asia/Tokyo，默认 relay 10:00/23:00，pipeline 00:00/11:00；schedules_paused 默认 true，lake_pipeline_paused 默认 true，频率可配置。生产服务显式设置 PIANOKT_ENV=production；正式导出和榜单过滤 production。上传到 READY 的等待受 relay 调度和积压影响；不能把异步通道描述成毫秒级服务端反馈。
 
 前端部署产物是 build/client，Terraform 没有负责托管这个静态站点。代码和 Terraform 存在不证明云账号已应用；实际状态需独立验收。
 
 ## 15. 兼容边界与未实现部分
 
-旧 Supabase Storage 录音可继续下载；旧播放事件 helper 用 atomic RPC，不能覆盖 backend 管理的 cycle。迁移 014 改了旧裸写权限，升级按 [部署手册](DEPLOYMENT_AND_ROADMAP_ZH.md) 协调进行。
+旧 Supabase Storage 录音可继续下载；旧播放事件 helper 已删除，016 撤销旧 log/aggregate/save recording RPC 的客户端权限，play_events_raw 不再生产 practice.event。升级按 [部署手册](DEPLOYMENT_AND_ROADMAP_ZH.md) 协调进行。
 
 仓库没有完整自动训练、模型注册、全局数据删除、服务端权威 assignment 校验和生产监控面板。根目录 midi_kc_labeler.py 是独立 raw feature 实验，不是当前线上标签入口；历史 prototype/tracks 文件也不代表当前 matcher。
 

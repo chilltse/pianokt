@@ -1,12 +1,16 @@
 import json
 from .selection import utc, eligible_results, rejection, select_one, attempt_order_key
 from ..contracts import stable_id
+from .attempts import filter_context
+from ..provenance import export_environment
 
-def export_dataset(objects,tables,cutoff,output_key, context=None, run_selection=None):
+def export_dataset(objects,tables,cutoff,output_key, context=None, run_selection=None, environment='production'):
+    environment=export_environment(environment)
+    if context is not None: context=filter_context(context,environment)
     boundary=utc(cutoff)
     examples=[]; selected={}
     by_id={str(a['attempt_id']):a for a in context['attempts']} if context is not None else {}
-    for r in eligible_results(objects,tables,cutoff,run_selection):
+    for r in eligible_results(objects,tables,cutoff,run_selection,environment):
         if rejection(r): continue
         a=by_id.get(r['attempt_id'])
         if context is not None:
@@ -27,7 +31,7 @@ def export_dataset(objects,tables,cutoff,output_key, context=None, run_selection
     provenance=[dict(attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],
                      matcher_version=r.get('matcher_version'),result_digest=r.get('_committed_digest'))
                 for r in sorted(selected.values(),key=lambda r:r['attempt_id'])]
-    payload=dict(source='postgres-ready-v1' if hasattr(tables,'results') else 'lake-completed-v1',
-                 feature_version='v1.1',quality_policy='quality-valid-and-not-waiting',runs=provenance,dataset_version=stable_id(cutoff,examples,provenance),cutoff=utc(cutoff).isoformat(),examples=examples,warning='Split students/time before windowing. No trained model is included.')
+    payload=dict(source_environment=environment,source='postgres-ready-v1' if hasattr(tables,'results') else 'lake-completed-v1',
+                 feature_version='v1.1',quality_policy='quality-valid-and-not-waiting',runs=provenance,dataset_version=stable_id(cutoff,environment,examples,provenance),cutoff=utc(cutoff).isoformat(),examples=examples,warning='Split students/time before windowing. No trained model is included.')
     objects.json(output_key,payload)
     return payload['dataset_version']

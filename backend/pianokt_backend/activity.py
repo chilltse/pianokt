@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from pydantic import AwareDatetime, BaseModel, Field
 from psycopg.types.json import Jsonb
+from .provenance import recording_environment
 
 
 class Visit(BaseModel):
@@ -47,14 +48,15 @@ def save_activity(c, uid, body):
         raise HTTPException(403, 'Activity belongs to another signed-in user')
     if body.attempt is not None:
         c.execute('select pg_advisory_xact_lock(hashtext(%s))',(str(body.attempt.attempt_id),))
+    environment = recording_environment()
     v = body.visit
     c.execute('insert into public.piano_learner_keys(user_id) values(%s) on conflict do nothing', (uid,))
     if body.events and body.attempt is None:
         raise HTTPException(422, 'Events require attempt context')
-    c.execute('''insert into public.student_visits(id,user_id,started_at,last_seen_at,last_sequence)
-        values(%s,%s,%s,%s,0) on conflict(id) do nothing''', (v.id, uid, v.started_at, v.occurred_at))
+    c.execute('''insert into public.student_visits(id,user_id,started_at,last_seen_at,last_sequence,source_environment)
+        values(%s,%s,%s,%s,0,%s) on conflict(id) do nothing''', (v.id, uid, v.started_at, v.occurred_at, environment))
     row = c.execute('select * from public.student_visits where id=%s for update', (v.id,)).fetchone()
-    if not row or str(row['user_id']) != str(uid) or row['started_at'] != v.started_at:
+    if not row or str(row['user_id']) != str(uid) or row['started_at'] != v.started_at or row['source_environment'] != environment:
         raise HTTPException(409, 'Visit identity conflict')
     c.execute('''update public.student_visits set last_seen_at=%s,last_sequence=%s,
         ended_at=%s,end_reason=%s,end_is_inferred=%s where id=%s and last_sequence<=%s''',
@@ -63,18 +65,19 @@ def save_activity(c, uid, body):
     a = body.attempt
     if a is None:
         return
-    c.execute('''insert into public.student_attempts(attempt_id,user_id,visit_id,visit_attempt_sequence,song_id,song_source,started_at)
-        values(%s,%s,%s,%s,%s,%s,%s) on conflict do nothing''',
-        (a.attempt_id, uid, v.id, a.visit_attempt_sequence, a.song_id, a.song_source, a.started_at))
+    c.execute('''insert into public.student_attempts(attempt_id,user_id,visit_id,visit_attempt_sequence,song_id,song_source,started_at,source_environment)
+        values(%s,%s,%s,%s,%s,%s,%s,%s) on conflict do nothing''',
+        (a.attempt_id, uid, v.id, a.visit_attempt_sequence, a.song_id, a.song_source, a.started_at, environment))
     row = c.execute('select * from public.student_attempts where attempt_id=%s for update', (a.attempt_id,)).fetchone()
-    expected = (str(uid), str(v.id), a.visit_attempt_sequence, a.song_id, a.song_source, a.started_at)
-    if not row or (str(row['user_id']), str(row['visit_id']), row['visit_attempt_sequence'], row['song_id'], row['song_source'], row['started_at']) != expected:
+    expected = (str(uid), str(v.id), a.visit_attempt_sequence, a.song_id, a.song_source, a.started_at, environment)
+    if not row or (str(row['user_id']), str(row['visit_id']), row['visit_attempt_sequence'], row['song_id'], row['song_source'], row['started_at'], row['source_environment']) != expected:
         raise HTTPException(409, 'Attempt context identity conflict')
-    sealed=c.execute('select finalization from public.piano_attempts where id=%s',(a.attempt_id,)).fetchone()
-    sealed_ids={e['event_id'] for e in sealed['finalization']['cycle']['events']} if sealed and sealed.get('finalization') else None
     for e in body.events:
-        if sealed_ids is not None and str(e.event_id) not in sealed_ids:
-            raise HTTPException(409, 'Finalized activity is immutable')
+        if row['sealed_at'] is not None:
+            existing = c.execute('select event_id from public.student_attempt_events where attempt_id=%s and event_id=%s',
+                                 (a.attempt_id, e.event_id)).fetchone()
+            if not existing:
+                raise HTTPException(409, 'Finalized activity is immutable')
         if (e.event_sequence == 0) != (e.event_type == 'play_started'):
             raise HTTPException(422, 'Sequence zero must be the unique play_started event')
         if e.event_sequence == 0 and e.occurred_at != a.started_at:

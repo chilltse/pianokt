@@ -52,8 +52,8 @@ export class ActivityTracker {
     restore: boolean,
     openedAt: string,
   ) {
-    this.sessionKey = `pianokt-visit:${userId}`
-    this.prefix = `pianokt-activity:${userId}:`
+    this.sessionKey = `pianokt-visit-v2:${userId}`
+    this.prefix = `pianokt-activity-v2:${userId}:`
     let previous: Saved | null = null
     try {
       previous = JSON.parse(deps.session.getItem(this.sessionKey) ?? 'null')
@@ -159,7 +159,7 @@ export class ActivityTracker {
           if (status && [400, 403, 409, 422].includes(status)) {
             // Keep rejected evidence for diagnosis without blocking every subsequent event.
             this.deps.durable.setItem(
-              key.replace('pianokt-activity:', 'pianokt-activity-rejected:'),
+              key.replace('pianokt-activity-v2:', 'pianokt-activity-rejected-v2:'),
               data,
             )
             if (this.deps.durable.getItem(key) === data) this.deps.durable.removeItem(key)

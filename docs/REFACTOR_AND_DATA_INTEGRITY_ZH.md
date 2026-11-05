@@ -1,5 +1,7 @@
 # 工程重构与数据完整性记录
 
+> 历史阶段记录：本文保留当时的设计/验收信息。2026-11-04 的当前实践已升级为 migration 016、Challenge v2 单表事件与默认 Direct Export；以 [当前架构](ARCHITECTURE_ZH.md)、[数据字典](DATA_CONTRACT_V2_ZH.md) 和 [升级手册](DEPLOYMENT_AND_ROADMAP_ZH.md) 为准。
+
 > 本文是 2026-11-02 至 2026-11-03 的实施记录。阅读当前完整架构，请从 [架构总览](ARCHITECTURE_ZH.md) 和 [实现参考](PIANOKT_SYSTEM_REFERENCE_ZH.md) 开始；这里保留改动原因、测试日期与迁移边界。
 
 实施日期：2026-11-02 至 2026-11-03。范围：浏览器录音与活动记录、API 最终提交、对齐 worker、事件投递、湖仓物化、训练导出及对应测试。本文记录本轮实际修改；之前已有的 visit/attempt 实现见 `VISITS_AND_ATTEMPT_DATASET_ZH.md`。

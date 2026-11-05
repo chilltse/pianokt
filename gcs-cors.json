@@ -1,0 +1,15 @@
+[
+    {
+      "origin": [
+        "http://localhost:5173",
+        "https://pianokt-anu.vercel.app"
+      ],
+      "method": ["GET", "PUT", "HEAD"],
+      "responseHeader": [
+        "Content-Type",
+        "x-goog-if-generation-match",
+        "ETag"
+      ],
+      "maxAgeSeconds": 3600
+    }
+  ]

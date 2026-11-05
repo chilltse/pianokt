@@ -377,10 +377,15 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       attemptContextRef.current,
       params.cycle.events.map(toActivityEvent),
     )
+    if (!activity?.attempt) {
+      showToast('Recording context is unavailable. Please sign in and try again.')
+      return null
+    }
     const inputs = await getMidiInputs()
     const midiKeyboardUsed = inputs.size > 0
 
     const result = await saveChallengeRecording({
+      schemaVersion: 2,
       songSource: source,
       songId: id,
       songTitle: songMeta?.title ?? null,
@@ -388,7 +393,6 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       midiBase64: base64,
       referenceMidiBase64: params.referenceMidiBase64,
       performanceEvents: params.performanceEvents,
-      sessionId: params.sessionId,
       activity,
       practiceSettings: {
         // `range` remains the compatibility field consumed by existing workers.
@@ -408,7 +412,6 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       accuracyPct: accuracy,
       difficulty,
       midiKeyboardUsed,
-      cycle: params.cycle,
     })
 
     console.log('[Challenge] saveChallengeRecording result:', result)
@@ -535,7 +538,6 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       {
         ...extraMetadata,
         accuracy_pct: terminal.accuracy,
-        song_time_sec: terminal.songTimeSec,
         ...(terminal.durationSec > 0 ? { song_duration_sec: terminal.durationSec } : {}),
       },
       terminal.songTimeSec,
@@ -631,9 +633,11 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       pausedByUserRef.current = true
       pendingTransportEventRef.current = null
       if (recordedTransportStartedRef.current) {
+        player.pause()
+        const pausedSongTime = nowSongSec()
         markPlayingStopped()
-        recordChallengeEvent('paused')
-        pauseRecording(nowSongSec())
+        recordChallengeEvent('paused', {}, pausedSongTime)
+        pauseRecording(pausedSongTime)
       } else {
         // The player may have transitioned out of the count-in just before
         // React's effect recorded `play_started`. There is still no valid
@@ -642,7 +646,6 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
         resetPlaySessionTracking()
         return
       }
-      player.pause()
       setIsConfirmExitOpen(true)
     }
   }

@@ -7,3 +7,8 @@ supabase_url = "https://YOUR_SUPABASE.supabase.co"
 supabase_anon_key = "PUBLIC_ANON_KEY"
 database_secret_id = "pianokt-database-url"
 schedules_paused = true
+
+source_environment = "production"
+lake_pipeline_paused = true
+# Keep production origins free of localhost; use a separate development deployment.
+local_development_origins = []

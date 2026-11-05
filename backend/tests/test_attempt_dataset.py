@@ -13,14 +13,14 @@ def fixture(tmp_path):
                   reject_reason={'event':[0,1], 'note':[[[0],[0]],[[],[1]]]},
                   timing_offset_ms=[[[0],[0]],[[],[None]]], pitch_offset_semitones=[[[0],[0]],[[],[None]]], extra_notes=[[],[]])
     def attempt(aid, vid, start, seq):
-        return dict(attempt_id=aid,visit_id=vid,visit_attempt_sequence=seq,user_id='private-auth-id',learner_key='learner',
+        return dict(source_environment='production',attempt_id=aid,visit_id=vid,visit_attempt_sequence=seq,user_id='private-auth-id',learner_key='learner',
                     song_id='song',song_source='builtin', started_at=start,ended_at='2026-01-02T01:01:00Z',
                     registered_at='2025-01-01T00:00:00Z',time_playing=1,is_played_in_full=False,exit_status='abandoned')
-    context = dict(visits=[dict(id='v2',user_id='private-auth-id',learner_key='learner',started_at='2026-01-02T01:00:00Z'),
-                           dict(id='v1',user_id='private-auth-id',learner_key='learner',started_at='2026-01-02T08:00:00+08:00')],
+    context = dict(visits=[dict(source_environment='production',id='v2',user_id='private-auth-id',learner_key='learner',started_at='2026-01-02T01:00:00Z'),
+                           dict(source_environment='production',id='v1',user_id='private-auth-id',learner_key='learner',started_at='2026-01-02T08:00:00+08:00')],
                    attempts=[attempt('a3','v2','2026-01-02T01:00:00Z',1),attempt('a2','v1','2026-01-02T08:02:00+08:00',2),attempt('a1','v1','2026-01-02T08:01:00+08:00',1)], events=[])
     for aid in ('a1','a2','a3'):
-        store.json(f'alignment/{aid}/result.json', dict(attempt_id=aid,alignment_run_id=aid,learner_key='learner',score_version='score',
+        store.json(f'alignment/{aid}/result.json', dict(source_environment='production',attempt_id=aid,alignment_run_id=aid,learner_key='learner',score_version='score',
             alignment_completed_at='2026-01-02T02:00:00Z', alignment_quality_valid=aid!='a2',events_data=events))
     tables = SimpleNamespace(rows=lambda _: [{'event_id':a} for a in ('a1','a2','a3','duplicate')])
     return store, tables, context
@@ -98,3 +98,16 @@ def test_explicit_run_selection_and_manifest_validation(tmp_path):
     manifest,files=read_bundle(store,'datasets/selected')
     assert manifest['count']==1
     assert json.loads(files['index_map.json'])[0]['alignment_run_id']=='duplicate'
+
+
+def test_environment_filtered_before_indices_and_unknown_never_promoted(tmp_path):
+    store,tables,context=fixture(tmp_path)
+    context['visits'].append(dict(id='dev-visit',learner_key='learner',source_environment='development',started_at='2025-01-01T00:00:00Z'))
+    dev=dict(context['attempts'][0],attempt_id='dev',visit_id='dev-visit',source_environment='development',started_at='2025-01-01T00:00:01Z')
+    unknown=dict(context['attempts'][0],attempt_id='unknown',source_environment='unknown',started_at='2025-01-01T00:00:02Z')
+    context['attempts'].extend([dev,unknown])
+    export_attempts(store,tables,'2026-02-01T00:00:00Z','datasets/filtered',context)
+    rows=[json.loads(line) for line in store.read('datasets/filtered/attempts.jsonl').splitlines()]
+    assert [(r['visit_index'],r['attempt_index']) for r in rows]==[(1,1),(2,3)]
+    raw=store.read('datasets/filtered/attempt_metadata.json')
+    assert b'"attempt_id":"dev"' not in raw and b'"attempt_id":"unknown"' not in raw

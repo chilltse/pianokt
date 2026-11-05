@@ -14,7 +14,7 @@ variable "frontend_origin" { type = string }
 variable "local_development_origins" {
   description = "Loopback browser origins allowed to call the public API and use signed raw-bucket uploads during local development."
   type        = list(string)
-  default     = ["http://localhost:5173", "http://127.0.0.1:5173"]
+  default     = []
 }
 variable "supabase_url" { type = string }
 variable "supabase_anon_key" { type = string }
@@ -22,6 +22,19 @@ variable "database_secret_id" { type = string }
 variable "schedules_paused" {
   type    = bool
   default = true
+}
+variable "source_environment" {
+  type    = string
+  default = "production"
+  validation {
+    condition     = contains(["production", "staging", "development", "test"], var.source_environment)
+    error_message = "Use a known server-owned environment."
+  }
+}
+variable "lake_pipeline_paused" {
+  type    = bool
+  default = true
+  description = "Direct Export is the default; explicitly opt in to scheduled lake materialization."
 }
 locals {
   browser_origins = distinct(concat([var.frontend_origin], var.local_development_origins))
@@ -166,7 +179,7 @@ resource "google_cloud_run_v2_service" "app" {
         }
       }
       dynamic "env" {
-        for_each = { RAW_ROOT = "gs://${google_storage_bucket.data["raw"].name}", SUPABASE_URL = var.supabase_url, SUPABASE_ANON_KEY = var.supabase_anon_key, FRONTEND_ORIGINS = join(",", local.browser_origins), SIGNING_SERVICE_ACCOUNT = google_service_account.runtime["api"].email }
+        for_each = { PIANOKT_ENV = var.source_environment, RAW_ROOT = "gs://${google_storage_bucket.data["raw"].name}", SUPABASE_URL = var.supabase_url, SUPABASE_ANON_KEY = var.supabase_anon_key, FRONTEND_ORIGINS = join(",", local.browser_origins), SIGNING_SERVICE_ACCOUNT = google_service_account.runtime["api"].email }
         content {
           name  = env.key
           value = env.value
@@ -249,7 +262,7 @@ resource "google_cloud_run_v2_job" "job" {
           }
         }
         dynamic "env" {
-          for_each = { RAW_ROOT = "gs://${google_storage_bucket.data["raw"].name}", LAKE_ROOT = "gs://${google_storage_bucket.data["lake"].name}", CHECKPOINT_ROOT = "gs://${google_storage_bucket.data["checkpoint"].name}", EVENT_TOPIC = google_pubsub_topic.events.id, ENABLE_SPARK_EVENTS = "1" }
+          for_each = { PIANOKT_ENV = var.source_environment, RAW_ROOT = "gs://${google_storage_bucket.data["raw"].name}", LAKE_ROOT = "gs://${google_storage_bucket.data["lake"].name}", CHECKPOINT_ROOT = "gs://${google_storage_bucket.data["checkpoint"].name}", EVENT_TOPIC = google_pubsub_topic.events.id, ENABLE_SPARK_EVENTS = "1" }
           content {
             name  = env.key
             value = env.value
@@ -272,7 +285,7 @@ resource "google_cloud_scheduler_job" "job" {
   name      = "pianokt-${each.key}"
   schedule  = each.key == "relay" ? var.relay_schedule : var.pipeline_schedule
   time_zone = "Asia/Tokyo"
-  paused    = var.schedules_paused
+  paused    = var.schedules_paused || (each.key == "pipeline" && var.lake_pipeline_paused)
   http_target {
     uri         = "https://run.googleapis.com/v2/${each.value.id}:run"
     http_method = "POST"

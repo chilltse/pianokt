@@ -42,6 +42,9 @@ export type PlayEventType = 'play_started' | 'paused' | 'resumed' | 'finished' |
 export type PlayExitStatus = 'succeeded' | 'abandoned' | 'failed' | 'unknown'
 
 export type UserPlayLogRow = {
+  completion_reason: 'finished' | 'exited' | null
+  client_success: boolean | null
+  projection_version: number
   session_id: string
   user_id: string
   song_id: string

@@ -21,12 +21,26 @@ jobs:
       - run: bun test src/features/parsers/parse-midi.test.ts src/features/challenge-history/referenceSnapshot.test.ts src/pages/play/components/TimelineStrip.utils.test.ts
       - run: bun run test:activity
       - run: bun run test:uploads
+      - run: bun run test:protocol
+      - run: node scripts/test_player_pause.mjs
       - run: bun run check-fmt
       - run: bun run check-types
       - run: bun run build
 
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: pianokt_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -42,6 +56,7 @@ jobs:
       - run: python -m pytest backend/tests -q
         env:
           PGLITE_MODULE: /tmp/pianokt-test-db/node_modules/@electric-sql/pglite/dist/index.js
+          PIANOKT_TEST_POSTGRES_DSN: postgresql://postgres:pianokt_test@localhost:5432/postgres
 
   spark:
     runs-on: ubuntu-latest

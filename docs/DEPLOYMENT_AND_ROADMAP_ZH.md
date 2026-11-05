@@ -1,9 +1,29 @@
 # PianoKT 运行与部署手册
 
-更新日期：2026-11-03。对应当前代码、migration 015 和 infra/gcp/main.tf。命令是供目标环境执行的操作说明；本次文档整理没有部署云资源。系统分工见 [架构总览](ARCHITECTURE_ZH.md)。
+更新日期：2026-11-04。对应当前代码、migration 016 和 infra/gcp/main.tf。命令是供目标环境执行的操作说明；本次文档整理没有部署云资源。系统分工见 [架构总览](ARCHITECTURE_ZH.md)。
 
-当前新增显式 `--source direct`：在同一 repeatable-read 快照内读取活动上下文与 PostgreSQL 当前 READY 指针，结束数据库事务后逐个读取 GCS、核对提交 SHA-256、身份与 schema，再复用原 exporter。它不依赖 Delta/Spark；省略参数仍走旧 `--source lake`。仅支持 migration 015 + 新 Worker 写入完整提交凭证的当前 run；历史无凭证结果明确报错，不能凭文件存在性回填。实际改动、部署和验收边界见 [简化实施记录](DATA_PIPELINE_SIMPLIFICATION_IMPLEMENTATION_ZH.md)。
+当前默认 `--source direct --environment production`。完整结构见 [v2 数据字典](DATA_CONTRACT_V2_ZH.md)。以下升级步骤优先于文中保留的 014 历史升级说明。
 
+## v2 / migration 016 升级顺序与注意事项
+
+1. 安排一次协调升级窗口，停止旧前端创建新演奏，暂停旧 API/Worker 的写入；本轮不维护 v1 上传兼容层。
+2. 在已有 001–015 的数据库执行 **新增** `supabase/migrations/016_challenge_event_authority.sql`。不要重跑整套历史 migration，不修改已应用文件。它新增来源/封存/投影字段，关闭旧 RPC/trigger，不删除历史数据。
+3. 发布新 API 和 Worker。生产明确设置 `PIANOKT_ENV=production`；开发使用独立 Supabase/GCS 和 development。未设置默认 development，因此漏配会使正式导出/榜单为空，而不会把开发数据当生产数据。
+4. 发布新前端并刷新所有标签页。新队列为 `pianokt-upload-recovery-v2`。旧 v1 请求返回 422，旧 IndexedDB/localStorage 队列不转换、不删除、不自动重试。当前允许不保留旧演奏的项目可直接新录；不要把本说明理解为自动清库。
+5. 检查 GCS CORS 和签名凭据。Terraform 默认 local_development_origins=[]，开发应使用开发部署；不要给生产加入 localhost 作为长期测试方案。
+6. 执行 [保存验收](CHALLENGE_SAVE_VERIFICATION_ZH.md)，确认只写 student_attempt_events，原始表无新增，outbox每attempt一条performance.uploaded。
+7. `schedules_paused=false` 才启用默认调度；`lake_pipeline_paused=true` 保持可选 Lake 独立暂停。新主链路需要 relay 和 Worker，不需要 Spark。现有 Terraform 状态不会因代码改动自动改变，请审阅 plan 再 apply。
+8. 导出正式数据使用 `--environment production`（默认）；开发验证显式 development。历史行被标为 unknown，默认排除；不可简单批量标 production，需独立审计。
+
+本迁移与新后端是一组部署单位。应用 016 后直接回滚旧 API 会遇到原始事件写权限和协议不兼容；优先向前修复，若要回滚需要专门迁移/版本协调。投影修复可运行：
+
+```bash
+pianokt-data rebuild-projections --attempt-id UUID
+pianokt-data export-attempts --cutoff 2026-11-05T00:00:00Z --output-prefix datasets/production-v2-001
+pianokt-data export-attempts --environment development --cutoff 2026-11-05T00:00:00Z --output-prefix datasets/dev-v2-001
+```
+
+上面的 cutoff 是示例，需要按实际研究边界选择。已有输出前缀不可用于不同内容的重新发布。实际部署不在本次代码修改中自动执行。
 
 ## 1. 先选择运行路径
 
@@ -203,7 +223,7 @@ gcloud run jobs execute pianokt-pipeline --project="$PROJECT_ID" --region="$REGI
 
 Scheduler 请求成功不代表内部作业计算成功，应核对执行状态与应用日志。API 请求不等待下一次 pipeline，worker 完成后就能通过 API 读取在线结果。
 
-## 9. 014 版本的协调升级
+## 9. 历史记录：014 版本的协调升级（当前升级以本文开头 016 为准）
 
 既有部署升级时，先备份并准备应用回滚方案；暂停/排空旧 worker，再应用缺少的 013、014，随后部署新 API/worker 和前端，最后恢复调度。
 

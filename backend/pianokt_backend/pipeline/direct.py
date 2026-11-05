@@ -3,19 +3,20 @@ import json
 from ..contracts import digest
 from .selection import utc
 from .attempts import validate_events
+from ..provenance import export_environment
 
 
-def read_committed(connection, cutoff):
+def read_committed(connection, cutoff, environment='production'):
     """Called alongside read_context in one short repeatable-read transaction."""
     rows = connection.execute("""
         select id as attempt_id, learner_key, alignment_run_id, result_key,
                reference_hash, performance_hash, result_digest,
-               result_committed_at, summary
+               result_committed_at, summary, source_environment
         from public.piano_attempts
-        where status='READY' and
+        where status='READY' and source_environment=%s and
               (result_committed_at < %s or result_committed_at is null)
         order by learner_key,id
-    """, (cutoff,)).fetchall()
+    """, (export_environment(environment),cutoff)).fetchall()
     return CommittedResults(rows)
 
 
@@ -23,9 +24,10 @@ class CommittedResults:
     def __init__(self, rows):
         self.rows = tuple(dict(row) for row in rows)
 
-    def results(self, objects, cutoff, run_selection=None):
+    def results(self, objects, cutoff, run_selection=None, environment='production'):
         boundary = utc(cutoff)
-        rows = self.rows
+        environment = export_environment(environment)
+        rows = [r for r in self.rows if r.get('source_environment') == environment]
         if run_selection is not None:
             available = {str(r['attempt_id']): r['alignment_run_id'] for r in rows
                          if r.get('result_committed_at') and utc(r['result_committed_at']) < boundary}
@@ -48,7 +50,7 @@ class CommittedResults:
             expected = dict(attempt_id=aid, learner_key=str(row['learner_key']),
                             alignment_run_id=row['alignment_run_id'],
                             score_version=row['reference_hash'],
-                            performance_hash=row['performance_hash'], schema_version=3)
+                            performance_hash=row['performance_hash'], schema_version=3, source_environment=environment)
             if any(result.get(k) != v for k, v in expected.items()):
                 raise ValueError(f'Committed result identity/schema mismatch: {aid}')
             if result.get('summary') != row['summary']:

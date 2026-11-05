@@ -125,6 +125,7 @@ def _is_current_result(result,row,config,expected_run,observed_end_sec,reference
         and result.get('performance_hash')==row['performance_hash']
         and result.get('matcher_version')==matcher_version()
         and result.get('config')==config.identity
+        and result.get('source_environment','unknown')==row.get('source_environment','unknown')
         and context.get('reference_origin_sec')==reference_origin_sec
         and context.get('observed_end_sec')==observed_end_sec
         and context.get('transport_segments_count')==(
@@ -145,7 +146,7 @@ def commit_alignment(c,attempt_id,lease_token,result_key,result):
     accuracy=result['summary'].get('accuracy')
     c.execute('update public.challenge_recordings set accuracy_pct=%s,score_source=%s where id=%s',
               (float(accuracy)*100 if quality_valid and accuracy is not None else 0,'aligned' if quality_valid and accuracy is not None else 'rejected',attempt_id))
-    payload=dict(event_type='alignment.completed',attempt_id=attempt_id,alignment_run_id=result['alignment_run_id'],result_key=result_key)
+    payload=dict(event_type='alignment.completed',attempt_id=attempt_id,alignment_run_id=result['alignment_run_id'],result_key=result_key,source_environment=result.get('source_environment','unknown'))
     c.execute('insert into public.piano_outbox(event_type,aggregate_id,payload) values(%s,%s,%s) on conflict do nothing',('alignment.completed',result['alignment_run_id'],Jsonb(payload)))
 
 def process(attempt_id):
@@ -198,7 +199,8 @@ def process(attempt_id):
                 result.update(
                 learner_key=str(row['learner_key']),
                 song_id=row['song_id'],
-                session_id=str(row['metadata'].get('session_id')) if row['metadata'].get('session_id') else None,
+                session_id=str(row['id']),
+                source_environment=row.get('source_environment','unknown'),
                 practice_metadata=row['metadata'],
                 attempt_created_at=row['created_at'].isoformat(),
                 alignment_completed_at=datetime.now(timezone.utc).isoformat(),

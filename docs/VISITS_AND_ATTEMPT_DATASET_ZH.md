@@ -1,5 +1,7 @@
 # visit、attempt 与训练数据集导出
 
+> 2026-11-04 更新：当前事件单表写入、来源隔离、封存字段及数据集 1.3 见 [v2 数据字典](DATA_CONTRACT_V2_ZH.md)。本文保留 Visit/Attempt 的研究定义；默认导出已为 Direct + production，旧来源 unknown 不自动纳入。
+
 更新日期：2026-11-03。对应 activity、pipeline/attempts.py、selection.py、publication.py 和 migration 015。项目全景见 [架构总览](ARCHITECTURE_ZH.md)。
 
 当前新增显式 `--source direct`：在同一 repeatable-read 快照内读取活动上下文与 PostgreSQL 当前 READY 指针，结束数据库事务后逐个读取 GCS、核对提交 SHA-256、身份与 schema，再复用原 exporter。它不依赖 Delta/Spark；省略参数仍走旧 `--source lake`。仅支持 migration 015 + 新 Worker 写入完整提交凭证的当前 run；历史无凭证结果明确报错，不能凭文件存在性回填。实际改动、部署和验收边界见 [简化实施记录](DATA_PIPELINE_SIMPLIFICATION_IMPLEMENTATION_ZH.md)。

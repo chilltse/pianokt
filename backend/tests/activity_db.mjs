@@ -13,9 +13,11 @@ for (const name of [
   '006_play_events_pipeline.sql',
   '007_user_play_logs_song_time_and_recording_link.sql',
   '009_lakehouse_backend.sql',
+  '011_performance_event_telemetry.sql',
   '013_visits_and_attempt_activity.sql',
   '014_atomic_attempt_commit.sql',
   '015_direct_export_commit.sql',
+  '016_challenge_event_authority.sql',
 ]) {
   await db.exec(await readFile(`supabase/migrations/${name}`, 'utf8'))
 }

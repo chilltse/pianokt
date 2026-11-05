@@ -1,10 +1,18 @@
 # 本地开发：三条不同的验证路径
 
-更新日期：2026-11-03。先选清楚要验证什么：只看网页、调试对齐算法、还是验证真实保存与异步处理。三者需要的外部服务不同。
+更新日期：2026-11-04。先选清楚要验证什么：只看网页、调试对齐算法、还是验证真实保存与异步处理。三者需要的外部服务不同。
+
+## v2 环境隔离
+
+先应用 migration 016。真实云端保存的本地测试应使用独立开发 Supabase 项目和 GCS Bucket，`PIANOKT_ENV=development`；`scripts/dev-backend.sh` 会强制该值。开发录音不会进入默认 production 导出或公开榜单。
+
+Alignment Lab 开启时，前端同时停止 Activity tracker 和云端上传队列；只调用本地 /debug/local-align。使用真实上传流程时关闭 VITE_LOCAL_ALIGNMENT_LAB，并保持 development 服务端标记。
+
+如需导出开发数据，显式 `--environment development`。即使共享研究账号，开发 Visit/Attempt 也在索引分配前被 production 导出剔除；仍推荐物理隔离。重启/刷新后新 v2 队列不重放旧 v1 包，详见 [升级说明](DEPLOYMENT_AND_ROADMAP_ZH.md)。
 
 ## 1. 安装运行环境
 
-在仓库根目录执行。后端声明 Python 精确版本 3.13.12，与两个 Dockerfile 一致。已有 .venv 不会因修改版本文件而自动换解释器。
+在仓库根目录执行。后端支持 Python 3.13.x，部署镜像固定 3.13.12。已有 .venv 不会因修改版本文件而自动换解释器。
 
 ```bash
 python3.13 --version

@@ -3,27 +3,43 @@ import json
 from collections import defaultdict
 from datetime import datetime, timezone
 from ..contracts import stable_id
+from ..provenance import export_environment
 
 
 from .selection import utc, eligible_results, rejection, select_one, attempt_order_key
 
 
-def read_context(c, cutoff):
-    """Run in one repeatable-read transaction before reading mutable history."""
+def read_context(c, cutoff, environment='production'):
+    """One environment, filtered BEFORE learner/visit/attempt indices are assigned."""
+    environment = export_environment(environment)
     visits = c.execute('''select v.*,k.learner_key from public.student_visits v
         join public.piano_learner_keys k on k.user_id=v.user_id
-        where v.started_at<%s and v.received_at<%s''', (cutoff, cutoff)).fetchall()
+        where v.started_at<%s and v.received_at<%s and v.source_environment=%s''', (cutoff, cutoff, environment)).fetchall()
     attempts = c.execute('''select a.*,k.learner_key,public.piano_registration_time(a.user_id) as registered_at,
-        l.time_playing,l.is_played_in_full,l.exit_status
+        l.time_playing,l.is_played_in_full,l.exit_status,l.completion_reason,l.client_success
         from public.student_attempts a join public.piano_learner_keys k on k.user_id=a.user_id
-        left join public.piano_attempts p on p.id=a.attempt_id
-        left join public.user_play_logs l on l.session_id=(p.metadata->>'session_id')::uuid
-        where a.started_at<%s and a.received_at<%s''', (cutoff, cutoff)).fetchall()
+        join public.student_visits v on v.id=a.visit_id
+        left join public.user_play_logs l on l.session_id=a.attempt_id
+        where a.started_at<%s and a.received_at<%s and a.source_environment=%s and v.source_environment=%s''', (cutoff, cutoff, environment, environment)).fetchall()
     events = c.execute('''select e.* from public.student_attempt_events e
         join public.student_attempts a using(attempt_id)
+        join public.student_visits v on v.id=a.visit_id
         where a.started_at<%s and e.received_at<%s and e.occurred_at<%s
-        order by e.attempt_id,e.event_sequence''', (cutoff, cutoff, cutoff)).fetchall()
-    return {'visits': visits, 'attempts': attempts, 'events': events}
+          and a.source_environment=%s and v.source_environment=%s
+        order by e.attempt_id,e.event_sequence''', (cutoff, cutoff, cutoff, environment, environment)).fetchall()
+    return {'visits': visits, 'attempts': attempts, 'events': events, 'source_environment': environment}
+
+
+def filter_context(context, environment):
+    """Also protect programmatic exports that supply snapshots instead of SQL."""
+    environment = export_environment(environment)
+    visits = [v for v in context['visits'] if v.get('source_environment') == environment]
+    visit_ids = {str(v['id']) for v in visits}
+    attempts = [a for a in context['attempts'] if a.get('source_environment') == environment and str(a['visit_id']) in visit_ids]
+    attempt_ids = {str(a['attempt_id']) for a in attempts}
+    return dict(visits=visits, attempts=attempts,
+                events=[e for e in context.get('events', []) if str(e['attempt_id']) in attempt_ids],
+                source_environment=environment)
 
 
 def json_value(value):
@@ -81,7 +97,8 @@ def build_record(result, context, visit_index, attempt_index):
     )
 
 
-def export_attempts(objects, tables, cutoff, output_prefix, context, run_selection=None):
+def export_attempts(objects, tables, cutoff, output_prefix, context, run_selection=None, environment='production'):
+    context = filter_context(context, environment)
     boundary = utc(cutoff)
     prefix = output_prefix.rstrip('/')
     visits = [v for v in context['visits'] if utc(v['started_at']) < boundary and utc(v.get('received_at', v['started_at'])) < boundary]
@@ -98,7 +115,7 @@ def export_attempts(objects, tables, cutoff, output_prefix, context, run_selecti
         attempt_indices[str(a['attempt_id'])] = counters[key]
     by_id = {str(a['attempt_id']): a for a in attempts}
     selected = {}; skipped = defaultdict(int)
-    for r in eligible_results(objects,tables,cutoff,run_selection):
+    for r in eligible_results(objects,tables,cutoff,run_selection,environment):
         a = by_id.get(r['attempt_id'])
         if a is None or str(a['visit_id']) not in visit_indices:
             skipped['missing_context'] += 1; continue
@@ -125,8 +142,9 @@ def export_attempts(objects, tables, cutoff, output_prefix, context, run_selecti
     events = [{k: v for k, v in row.items() if k != 'user_id'} for row in context.get('events', [])
               if str(row['attempt_id']) in by_id and utc(row['occurred_at']) < boundary and utc(row.get('received_at', row['occurred_at'])) < boundary]
     snapshots = json_value(dict(visits=visit_rows, attempts=attempt_rows, events=events, index_map=mappings))
-    version = stable_id('attempt-v1.2', utc(cutoff).isoformat(), records, snapshots)
-    manifest = dict(dataset_version=version, schema_version='1.2', cutoff=utc(cutoff).isoformat(),
+    version = stable_id('attempt-v1.3', environment, utc(cutoff).isoformat(), records, snapshots)
+    manifest = dict(dataset_version=version, schema_version='1.3', source_environment=environment,
+                    outcome_semantics='exit_status is client-reported; completion_reason is transport terminal; aligned grade is separate', cutoff=utc(cutoff).isoformat(),
                     count=len(records), skipped=dict(skipped),
                     source='postgres-ready-v1' if hasattr(tables,'results') else 'lake-completed-v1',
                     feature_version='v1.1', quality_policy='quality-valid-and-not-waiting', ordering='Per learner: UTC started_at; visit ID, within-visit attempt sequence, attempt ID break ties. Indices assigned before quality filtering.',

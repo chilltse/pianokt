@@ -58,13 +58,13 @@ get_leaderboard 的 accuracy_avg 仅统计 aligned。挑战次数仍统计已最
 
 首页按 challenge_recordings 和 profiles 变化订阅 Realtime，收到可见事件后重新查询。它依赖项目启用相应 publication 和访问策略；存在订阅代码不等于跨用户实时更新一定已配置成功。
 
-不要从旧文档重新复制 avg(所有 accuracy_pct) 的 leaderboard SQL，它会覆盖 migration 014 的正式成绩规则。
+不要从旧文档重新复制 leaderboard SQL。migration 016 仅统计 production 录音，正确率只聚合 aligned。
 
 ## 7. 客户端和后台能做什么
 
 客户端可以读自己的 visit/attempt/event、上传任务与录音；偏好表允许管理自己的偏好。新的核心写入由 API 或受控 RPC 执行，不能依赖浏览器直写多张表实现事务。
 
-migration 014 撤销 challenge_recordings、play_events_raw、user_play_logs 的客户端直接写权限，旧裸 log_play_event 也不再是客户端入口。历史 helper 使用 log_play_event_atomic，将终止事件和汇总放进单次调用；backend 管理的 cycle 由 finalize 专门负责。
+migration 014 撤销 challenge_recordings、play_events_raw、user_play_logs 的客户端直接写权限，旧裸 log_play_event 也不再是客户端入口。本轮代码已删除旧前端 helper；migration 016 撤销 log_play_event_atomic/upsert_user_play_log/save_challenge_recording 的客户端执行权限。Challenge v2 使用统一 Activity 契约，由 finalize 补齐并封存 student_attempt_events。
 
 后端使用独立 PostgreSQL LOGIN，归入 `supabase/backend_role.sql` 定义的 pianokt_backend 权限组。该组具有明确表权限/RLS policy，没有 BYPASSRLS 或 superuser。浏览器不能持有这个连接串或加入这个权限组。
 
@@ -78,7 +78,8 @@ worker 的 /pubsub 由 Cloud Run IAM 限制为 Pub/Sub push 身份；应用本�
 - 011：逐按键 telemetry 文件身份。
 - 012：日本时间展示视图。
 - 013：visit/attempt 活动上下文。
-- 014：最终提交身份、worker lease token、正式评分和原子旧事件 RPC。
+- 014：最终提交身份、worker lease token、正式评分和历史原子 RPC。
+- 016：单表事件封存、来源隔离、投影字段、旧 RPC 退役与生产榜单过滤。详见 [数据字典](DATA_CONTRACT_V2_ZH.md)。
 
 `000_run_this_first_save_challenge_recording.sql` 是历史修复脚本；`migrations/sss` 是临时查询，不是应顺序执行的正式迁移。已有项目先核对实际 schema，再按缺少的迁移升级；不要用通配符盲跑整个目录。
 

@@ -494,8 +494,8 @@ export class Player {
 
     // If at the end of the song, stop playing.
     if (this.currentSongTime >= this.getDuration()) {
-      this.seek(this.getDuration())
       this.pause()
+      this.seek(this.getDuration())
     }
 
     // If a range is selected and you just got past it then zoom back
@@ -613,6 +613,10 @@ export class Player {
     if (!this.isPlaying()) {
       return
     }
+    // Preserve the interpolated position before changing state. Otherwise a
+    // pause rewinds to the last timer tick, earlier than recorded MIDI and
+    // transport events, and the next resume/stop fails monotonic validation.
+    this.currentSongTime = this.getTime()
     this.store.set(this.state, 'Paused')
     clearInterval(this.playInterval)
     this.playInterval = null

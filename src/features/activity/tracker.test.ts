@@ -108,7 +108,7 @@ test('offline events persist and replay only for their owner', async () => {
   const b = new ActivityTracker('user-b', deps, false, deps.now())
   await settle()
   await b.flush()
-  assert.ok([...deps.durable.data.keys()].every((k) => k.startsWith('pianokt-activity:user-a:')))
+  assert.ok([...deps.durable.data.keys()].every((k) => k.startsWith('pianokt-activity-v2:user-a:')))
   await a.flush()
   assert.equal(deps.durable.length, 0)
   assert.ok(sent.some((r) => r.events[0]?.event_type === 'paused'))
