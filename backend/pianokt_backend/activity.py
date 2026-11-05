@@ -50,6 +50,17 @@ def save_activity(c, uid, body):
     if body.attempt is not None:
         with stage('db.attempt_lock'):
             sql(c, 'advisory.activity', 'select pg_advisory_xact_lock(hashtext(%s))',(str(body.attempt.attempt_id),))
+    return _save_activity_locked(c, uid, body)
+
+
+def _save_activity_locked(c, uid, body):
+    """Internal writer: caller holds this Attempt's advisory xact lock.
+
+    finalize validates that body.attempt matches its locked piano_attempt first.
+    Visit-only packets need no Attempt lock. The caller owns the transaction.
+    """
+    if str(body.owner_id) != str(uid):
+        raise HTTPException(403, 'Activity belongs to another signed-in user')
     event_count('activity.events', len(body.events))
     environment = recording_environment()
     v = body.visit
@@ -75,8 +86,72 @@ def save_activity(c, uid, body):
     expected = (str(uid), str(v.id), a.visit_attempt_sequence, a.song_id, a.song_source, a.started_at, environment)
     if not row or (str(row['user_id']), str(row['visit_id']), row['visit_attempt_sequence'], row['song_id'], row['song_source'], row['started_at'], row['source_environment']) != expected:
         raise HTTPException(409, 'Attempt context identity conflict')
-    for e in body.events:
-        if row['sealed_at'] is not None:
+    if _can_batch_events(body.events, a, row['sealed_at']):
+        _save_events_batch(c, uid, a, body.events)
+    else:
+        # Keep sequential error precedence for sealed, malformed or internally
+        # duplicated packets. Finalize's validated new cycles use the batch path.
+        _save_events_sequential(c, uid, a, body.events, row['sealed_at'])
+    # Out-of-order delivery is allowed; the latest sequence determines state.
+    last = sql(c, 'event.latest_select', 'select event_type,occurred_at from public.student_attempt_events where attempt_id=%s order by event_sequence desc limit 1', (a.attempt_id,)).fetchone()
+    if last:
+        terminal = last['event_type'] in ('finished', 'exited', 'interrupted')
+        sql(c, 'attempt.update', 'update public.student_attempts set ended_at=%s,end_reason=%s where attempt_id=%s',
+                  (last['occurred_at'] if terminal else None, last['event_type'] if terminal else None, a.attempt_id))
+
+
+def _can_batch_events(events, attempt, sealed_at):
+    if not events or sealed_at is not None:
+        return False
+    if len({e.event_id for e in events}) != len(events) or len({e.event_sequence for e in events}) != len(events):
+        return False
+    return all(
+        (e.event_sequence == 0) == (e.event_type == 'play_started')
+        and (e.event_sequence != 0 or e.occurred_at == attempt.started_at)
+        and e.event_sequence <= 2147483647
+        and _batch_metadata_safe(e.metadata)
+        for e in events
+    )
+
+
+def _batch_metadata_safe(metadata):
+    # Unsupported JSONB values must reach the original sequential path, so a
+    # later database/adaptation error cannot precede an earlier identity error.
+    try:
+        encoded = json.dumps(metadata, allow_nan=False)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return len(encoded) <= 16000 and r'\u0000' not in encoded and r'\ud' not in encoded
+
+
+def _save_events_batch(c, uid, a, events):
+    # Only placeholder structure is generated; every value remains bound.
+    values = ','.join(['(%s,%s,%s,%s,%s,%s,%s,%s,%s)'] * len(events))
+    parameters = tuple(value for e in events for value in (
+        e.event_id, a.attempt_id, uid, e.event_sequence, e.event_type,
+        e.occurred_at, e.song_time_sec, e.elapsed_playing_sec, Jsonb(e.metadata)))
+    sql(c, 'event.batch_insert',
+        'insert into public.student_attempt_events(event_id,attempt_id,user_id,event_sequence,event_type,occurred_at,song_time_sec,elapsed_playing_sec,metadata) values '
+        + values + ' on conflict do nothing', parameters)
+    # Separate statement: see rows committed by a competing unique-key writer
+    # that the INSERT waited for. A data-modifying CTE shares one snapshot and
+    # cannot replace this check safely. LEFT JOIN retains missing/conflicting IDs.
+    inputs = ','.join(f'({i},%s::uuid,%s::double precision,%s::double precision)' for i in range(len(events)))
+    parameters = tuple(value for e in events for value in (e.event_id, e.song_time_sec, e.elapsed_playing_sec))
+    stored = sql(c, 'event.batch_conflict_select',
+        'select stored.*, input.ordinal, '
+        'stored.song_time_sec is not distinct from input.song_time_sec as song_time_matches, '
+        'stored.elapsed_playing_sec is not distinct from input.elapsed_playing_sec as elapsed_matches '
+        'from (values ' + inputs + ') as input(ordinal,event_id,song_time_sec,elapsed_playing_sec) '
+        'left join public.student_attempt_events stored on stored.event_id=input.event_id '
+        'order by input.ordinal', parameters).fetchall()
+    for e, row in zip(events, stored, strict=True):
+        _check_event_identity(a, e, row if row['event_id'] is not None else None)
+
+
+def _save_events_sequential(c, uid, a, events, sealed_at):
+    for e in events:
+        if sealed_at is not None:
             existing = sql(c, 'event.sealed_select', 'select event_id from public.student_attempt_events where attempt_id=%s and event_id=%s',
                                  (a.attempt_id, e.event_id)).fetchone()
             if not existing:
@@ -97,22 +172,20 @@ def save_activity(c, uid, body):
             elapsed_playing_sec is not distinct from %s::double precision as elapsed_matches
             from public.student_attempt_events where event_id=%s''',
             (e.song_time_sec, e.elapsed_playing_sec, e.event_id)).fetchone()
-        differences = ['event_id_or_sequence'] if not stored else [
-            k for k, value in e.model_dump().items()
-            if k not in ('event_id', 'song_time_sec', 'elapsed_playing_sec') and stored[k] != value
-        ]
-        if stored:
-            if str(stored['attempt_id']) != str(a.attempt_id): differences.append('attempt_id')
-            if not stored['song_time_matches']: differences.append('song_time_sec')
-            if not stored['elapsed_matches']: differences.append('elapsed_playing_sec')
-        if differences:
-            logging.getLogger(__name__).warning(
-                'Activity identity conflict attempt=%s event=%s fields=%s',
-                a.attempt_id, e.event_id, ','.join(differences))
-            raise HTTPException(409, 'Activity event identity conflict')
-    # Out-of-order delivery is allowed; the latest sequence determines state.
-    last = sql(c, 'event.latest_select', 'select event_type,occurred_at from public.student_attempt_events where attempt_id=%s order by event_sequence desc limit 1', (a.attempt_id,)).fetchone()
-    if last:
-        terminal = last['event_type'] in ('finished', 'exited', 'interrupted')
-        sql(c, 'attempt.update', 'update public.student_attempts set ended_at=%s,end_reason=%s where attempt_id=%s',
-                  (last['occurred_at'] if terminal else None, last['event_type'] if terminal else None, a.attempt_id))
+        _check_event_identity(a, e, stored)
+
+
+def _check_event_identity(a, e, stored):
+    differences = ['event_id_or_sequence'] if not stored else [
+        k for k, value in e.model_dump().items()
+        if k not in ('event_id', 'song_time_sec', 'elapsed_playing_sec') and stored[k] != value
+    ]
+    if stored:
+        if str(stored['attempt_id']) != str(a.attempt_id): differences.append('attempt_id')
+        if not stored['song_time_matches']: differences.append('song_time_sec')
+        if not stored['elapsed_matches']: differences.append('elapsed_playing_sec')
+    if differences:
+        logging.getLogger(__name__).warning(
+            'Activity identity conflict attempt=%s event=%s fields=%s',
+            a.attempt_id, e.event_id, ','.join(differences))
+        raise HTTPException(409, 'Activity event identity conflict')

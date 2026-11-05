@@ -81,3 +81,67 @@ def test_activity_finalize_share_one_transaction_lock(postgres,first,late):
         assert c.execute('select count(*) n from student_attempt_events').fetchone()['n']==2
         assert c.execute('select count(*) n from piano_outbox').fetchone()['n']==1
         assert c.execute('select count(*) n from play_events_raw').fetchone()['n']==0
+
+
+def assert_blocked_by(dsn, waiting_pid, blocking_pid):
+    with psycopg.connect(dsn, autocommit=True) as observer:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            state = observer.execute(
+                'select wait_event_type,pg_blocking_pids(pid) from pg_stat_activity where pid=%s',
+                (waiting_pid,)).fetchone()
+            if state and state[0] == 'Lock' and blocking_pid in state[1]:
+                return
+            time.sleep(.01)
+    pytest.fail('Expected transaction did not block the competing writer')
+
+
+def test_different_attempts_still_serialize_on_shared_visit(postgres):
+    with psycopg.connect(postgres, row_factory=dict_row) as setup:
+        save_activity(setup, U, packet())
+    second_body = packet(sequence=3, attempt=str(uuid4()))
+    second_body.events[0].event_id = uuid4()
+    with psycopg.connect(postgres, row_factory=dict_row) as second, ThreadPoolExecutor(max_workers=1) as executor:
+        with psycopg.connect(postgres, row_factory=dict_row) as primary:
+            primary.execute('select * from student_visits where id=%s for update', (second_body.visit.id,))
+            future = executor.submit(save_activity, second, U, second_body)
+            assert_blocked_by(postgres, second.info.backend_pid, primary.info.backend_pid)
+        future.result(timeout=5)
+    with psycopg.connect(postgres) as c:
+        assert c.execute('select count(*) from student_attempts').fetchone()[0] == 2
+
+
+@pytest.mark.parametrize('table,key', [('piano_attempts', 'id'), ('student_attempts', 'attempt_id')])
+def test_finalize_preserves_attempt_row_locks(postgres, table, key):
+    with psycopg.connect(postgres, row_factory=dict_row) as setup:
+        row = new_upload(setup)
+        save_activity(setup, U, packet())
+    with psycopg.connect(postgres, row_factory=dict_row) as second, ThreadPoolExecutor(max_workers=1) as executor:
+        with psycopg.connect(postgres) as primary:
+            primary.execute(sql.SQL('select * from {} where {}=%s for update').format(
+                sql.Identifier(table), sql.Identifier(key)), (A,))
+            future = executor.submit(commit_finalization, second, row, U, full_packet())
+            assert_blocked_by(postgres, second.info.backend_pid, primary.info.backend_pid)
+        assert future.result(timeout=5)['status'] == 'ACCEPTED'
+
+
+def test_batch_checks_event_id_conflict_after_concurrent_insert_commits(postgres):
+    with psycopg.connect(postgres, row_factory=dict_row) as setup:
+        new_upload(setup)  # Commit learner first so the event unique key is the blocker.
+    other = packet(attempt=str(uuid4()))
+    other.visit.id = uuid4()
+    second = psycopg.connect(postgres, row_factory=dict_row)
+    pid = second.info.backend_pid
+    def contender():
+        with second:
+            save_activity(second, U, other)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with psycopg.connect(postgres, row_factory=dict_row) as primary:
+            save_activity(primary, U, packet())
+            future = executor.submit(contender)
+            assert_blocked_by(postgres, pid, primary.info.backend_pid)
+        with pytest.raises(HTTPException, match='identity conflict'):
+            future.result(timeout=5)
+    with psycopg.connect(postgres) as c:
+        assert c.execute('select count(*) from student_attempt_events').fetchone()[0] == 1
+        assert c.execute('select count(*) from student_attempts').fetchone()[0] == 1

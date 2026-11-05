@@ -190,8 +190,7 @@ def finalize(attempt_id:uuid.UUID,body:Finalize,uid=Depends(user)):
     with connect() as c:
         row=owned_attempt(c,attempt_id,uid)
         if not row: raise HTTPException(404,'Attempt not found')
-        commit_finalization(c,row,uid,body)
-        row=owned_attempt(c,attempt_id,uid)
+        row=commit_finalization(c,row,uid,body)
     return {'id':str(attempt_id),'status':row['status'],'validated_at':row['validated_at']}
 
 @app.get('/attempts/{attempt_id}')
