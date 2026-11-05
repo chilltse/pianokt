@@ -1,5 +1,5 @@
 """Durable visit/attempt history, independent of MIDI finalization."""
-from .timing import stage
+from .timing import stage, sql, event_count
 import json
 import logging
 from typing import Literal
@@ -49,34 +49,35 @@ def save_activity(c, uid, body):
         raise HTTPException(403, 'Activity belongs to another signed-in user')
     if body.attempt is not None:
         with stage('db.attempt_lock'):
-            c.execute('select pg_advisory_xact_lock(hashtext(%s))',(str(body.attempt.attempt_id),))
+            sql(c, 'advisory.activity', 'select pg_advisory_xact_lock(hashtext(%s))',(str(body.attempt.attempt_id),))
+    event_count('activity.events', len(body.events))
     environment = recording_environment()
     v = body.visit
-    c.execute('insert into public.piano_learner_keys(user_id) values(%s) on conflict do nothing', (uid,))
+    sql(c, 'learner.write', 'insert into public.piano_learner_keys(user_id) values(%s) on conflict do nothing', (uid,))
     if body.events and body.attempt is None:
         raise HTTPException(422, 'Events require attempt context')
-    c.execute('''insert into public.student_visits(id,user_id,started_at,last_seen_at,last_sequence,source_environment)
+    sql(c, 'visit.insert', '''insert into public.student_visits(id,user_id,started_at,last_seen_at,last_sequence,source_environment)
         values(%s,%s,%s,%s,0,%s) on conflict(id) do nothing''', (v.id, uid, v.started_at, v.occurred_at, environment))
-    row = c.execute('select * from public.student_visits where id=%s for update', (v.id,)).fetchone()
+    row = sql(c, 'row_lock.visit', 'select * from public.student_visits where id=%s for update', (v.id,)).fetchone()
     if not row or str(row['user_id']) != str(uid) or row['started_at'] != v.started_at or row['source_environment'] != environment:
         raise HTTPException(409, 'Visit identity conflict')
-    c.execute('''update public.student_visits set last_seen_at=%s,last_sequence=%s,
+    sql(c, 'visit.update', '''update public.student_visits set last_seen_at=%s,last_sequence=%s,
         ended_at=%s,end_reason=%s,end_is_inferred=%s where id=%s and last_sequence<=%s''',
         (v.occurred_at, v.sequence, None if v.state == 'active' else v.occurred_at,
          None if v.state == 'active' else v.state, v.state == 'pagehide', v.id, v.sequence))
     a = body.attempt
     if a is None:
         return
-    c.execute('''insert into public.student_attempts(attempt_id,user_id,visit_id,visit_attempt_sequence,song_id,song_source,started_at,source_environment)
+    sql(c, 'attempt.insert', '''insert into public.student_attempts(attempt_id,user_id,visit_id,visit_attempt_sequence,song_id,song_source,started_at,source_environment)
         values(%s,%s,%s,%s,%s,%s,%s,%s) on conflict do nothing''',
         (a.attempt_id, uid, v.id, a.visit_attempt_sequence, a.song_id, a.song_source, a.started_at, environment))
-    row = c.execute('select * from public.student_attempts where attempt_id=%s for update', (a.attempt_id,)).fetchone()
+    row = sql(c, 'row_lock.activity_attempt', 'select * from public.student_attempts where attempt_id=%s for update', (a.attempt_id,)).fetchone()
     expected = (str(uid), str(v.id), a.visit_attempt_sequence, a.song_id, a.song_source, a.started_at, environment)
     if not row or (str(row['user_id']), str(row['visit_id']), row['visit_attempt_sequence'], row['song_id'], row['song_source'], row['started_at'], row['source_environment']) != expected:
         raise HTTPException(409, 'Attempt context identity conflict')
     for e in body.events:
         if row['sealed_at'] is not None:
-            existing = c.execute('select event_id from public.student_attempt_events where attempt_id=%s and event_id=%s',
+            existing = sql(c, 'event.sealed_select', 'select event_id from public.student_attempt_events where attempt_id=%s and event_id=%s',
                                  (a.attempt_id, e.event_id)).fetchone()
             if not existing:
                 raise HTTPException(409, 'Finalized activity is immutable')
@@ -86,12 +87,12 @@ def save_activity(c, uid, body):
             raise HTTPException(422, 'Start event must match attempt started_at')
         if len(json.dumps(e.metadata)) > 16000:
             raise HTTPException(422, 'Event metadata too large')
-        c.execute('''insert into public.student_attempt_events(event_id,attempt_id,user_id,event_sequence,event_type,occurred_at,song_time_sec,elapsed_playing_sec,metadata)
+        sql(c, 'event.insert', '''insert into public.student_attempt_events(event_id,attempt_id,user_id,event_sequence,event_type,occurred_at,song_time_sec,elapsed_playing_sec,metadata)
             values(%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict do nothing''',
             (e.event_id, a.attempt_id, uid, e.event_sequence, e.event_type, e.occurred_at, e.song_time_sec, e.elapsed_playing_sec, Jsonb(e.metadata)))
         # Compare float8 values inside PostgreSQL: text output can be rounded by
         # extra_float_digits (including settings on pooled connections).
-        stored = c.execute('''select *,
+        stored = sql(c, 'event.conflict_select', '''select *,
             song_time_sec is not distinct from %s::double precision as song_time_matches,
             elapsed_playing_sec is not distinct from %s::double precision as elapsed_matches
             from public.student_attempt_events where event_id=%s''',
@@ -110,8 +111,8 @@ def save_activity(c, uid, body):
                 a.attempt_id, e.event_id, ','.join(differences))
             raise HTTPException(409, 'Activity event identity conflict')
     # Out-of-order delivery is allowed; the latest sequence determines state.
-    last = c.execute('select event_type,occurred_at from public.student_attempt_events where attempt_id=%s order by event_sequence desc limit 1', (a.attempt_id,)).fetchone()
+    last = sql(c, 'event.latest_select', 'select event_type,occurred_at from public.student_attempt_events where attempt_id=%s order by event_sequence desc limit 1', (a.attempt_id,)).fetchone()
     if last:
         terminal = last['event_type'] in ('finished', 'exited', 'interrupted')
-        c.execute('update public.student_attempts set ended_at=%s,end_reason=%s where attempt_id=%s',
+        sql(c, 'attempt.update', 'update public.student_attempts set ended_at=%s,end_reason=%s where attempt_id=%s',
                   (last['occurred_at'] if terminal else None, last['event_type'] if terminal else None, a.attempt_id))

@@ -11,7 +11,7 @@ import httpx
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from threading import Lock
-from .timing import stage, trace_id
+from .timing import stage, trace_id, event_count
 from fastapi import FastAPI,Depends,Header,HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel,Field
@@ -56,7 +56,7 @@ async def request_timing(request, call_next):
     # Path has no query string, so signed credentials cannot enter these logs.
     token = trace_id.set(str(uuid.uuid4()))
     try:
-        with stage('http.' + request.method + '.' + request.url.path):
+        with stage('http.' + request.method + '.' + ('activity' if request.url.path == '/activity' else 'finalize' if request.url.path.endswith('/finalize') else 'other')):
             response = await call_next(request)
             response.headers['X-Request-ID'] = trace_id.get()
             return response
@@ -185,6 +185,7 @@ def create_attempt(body:Upload,uid=Depends(user)):
 def finalize(attempt_id:uuid.UUID,body:Finalize,uid=Depends(user)):
     if body.schema_version != 3:
         raise HTTPException(422, 'Async finalize requires schema_version=3; refresh the frontend')
+    event_count('finalize.activity_events', len(body.activity.events))
     # No GCS network operations here: DB commit is the durable handoff.
     with connect() as c:
         row=owned_attempt(c,attempt_id,uid)

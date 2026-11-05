@@ -1,10 +1,11 @@
 """Rebuildable product projections; client outcome and aligned grade stay distinct."""
+from .timing import sql
 from fastapi import HTTPException
 from .upload_contracts import Finalize, validate_finalization
 
 
 def project_challenge(c, row, body):
-    existing_recording = c.execute('select user_id from public.challenge_recordings where id=%s', (row['id'],)).fetchone()
+    existing_recording = sql(c, 'projection.recording_select', 'select user_id from public.challenge_recordings where id=%s', (row['id'],)).fetchone()
     if existing_recording and str(existing_recording['user_id']) != str(row['user_id']):
         raise HTTPException(409, 'Recording projection ownership conflict')
     events = body.activity.events
@@ -14,7 +15,7 @@ def project_challenge(c, row, body):
     aligned = row['status'] == 'READY' and quality.get('alignment_quality_valid') is True and quality.get('accuracy') is not None
     score_source = ('aligned' if aligned else 'rejected') if row['status'] == 'READY' else 'pending'
     score = float(quality['accuracy']) * 100 if aligned else 0
-    c.execute('''insert into public.challenge_recordings(id,user_id,song_source,song_id,song_title,duration_sec,midi_storage_path,midi_keyboard_used,accuracy_pct,difficulty,client_accuracy_pct,score_source,source_environment)
+    sql(c, 'projection.recording_write', '''insert into public.challenge_recordings(id,user_id,song_source,song_id,song_title,duration_sec,midi_storage_path,midi_keyboard_used,accuracy_pct,difficulty,client_accuracy_pct,score_source,source_environment)
         values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         on conflict(id) do update set song_source=excluded.song_source,song_id=excluded.song_id,
         song_title=excluded.song_title,duration_sec=excluded.duration_sec,midi_storage_path=excluded.midi_storage_path,
@@ -26,14 +27,14 @@ def project_challenge(c, row, body):
          str(settings['client_accuracy_pct']) if settings.get('client_accuracy_pct') is not None else None, score_source, row['source_environment']))
     if not row.get('validated_at'):
         return
-    existing = c.execute('select user_id,challenge_recording_id from public.user_play_logs where session_id=%s for update', (row['id'],)).fetchone()
+    existing = sql(c, 'row_lock.projection_session', 'select user_id,challenge_recording_id from public.user_play_logs where session_id=%s for update', (row['id'],)).fetchone()
     if existing and (str(existing['user_id']) != str(row['user_id']) or
                      (existing['challenge_recording_id'] and str(existing['challenge_recording_id']) != str(row['id']))):
         raise HTTPException(409, 'Session projection ownership conflict')
     client_success = terminal.metadata.get('success')
     client_success = client_success if isinstance(client_success, bool) else None
     exit_status = 'abandoned' if terminal.event_type == 'exited' else ('succeeded' if client_success is True else 'failed' if client_success is False else 'unknown')
-    c.execute('''insert into public.user_play_logs(session_id,user_id,song_id,exercise_id,play_mode,
+    sql(c, 'projection.session_write', '''insert into public.user_play_logs(session_id,user_id,song_id,exercise_id,play_mode,
         days_since_signup,time_playing,song_time_sec,challenge_recording_id,is_played_in_full,exit_status,
         started_at,ended_at,events_count,completion_reason,client_success,projection_version)
         values(%s,%s,%s,%s,'challenge',(extract(epoch from (%s::timestamptz-public.piano_registration_time(%s)))/86400.0),
@@ -51,8 +52,8 @@ def project_challenge(c, row, body):
 
 def rebuild_projections(c, attempt_id):
     """Operator command: caller owns transaction; serialize with finalize/Worker."""
-    c.execute('select pg_advisory_xact_lock(hashtext(%s))', (str(attempt_id),))
-    row = c.execute('select * from public.piano_attempts where id=%s for update', (attempt_id,)).fetchone()
+    sql(c, 'advisory.rebuild', 'select pg_advisory_xact_lock(hashtext(%s))', (str(attempt_id),))
+    row = sql(c, 'row_lock.rebuild_attempt', 'select * from public.piano_attempts where id=%s for update', (attempt_id,)).fetchone()
     if not row or row['status'] == 'CREATED' or not row.get('finalization'):
         raise ValueError('Only finalized v2 attempts can rebuild projections')
     body = Finalize.model_validate(row['finalization'])

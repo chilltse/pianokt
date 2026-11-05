@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from threading import Lock
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
-from .timing import stage
+from .timing import stage, sql, sql_summary, TimedExit, backend_identity
 
 _pool = None
 _pool_enabled = False
@@ -36,19 +36,21 @@ def close_pool():
 def connect():
     # Jobs/CLI keep dedicated connections, including session-level advisory locks.
     if not _pool_enabled:
-        with psycopg.connect(os.environ['DATABASE_URL'], row_factory=dict_row,
-                             connect_timeout=10, options='-c extra_float_digits=1') as connection:
+        with sql_summary(), TimedExit(psycopg.connect(os.environ['DATABASE_URL'], row_factory=dict_row,
+                             connect_timeout=10, options='-c extra_float_digits=1')) as connection:
+            backend_identity(connection)
             yield connection
         return
     current = pool()
     with stage('db.acquire'):
         connection = current.getconn()
     try:
-        with stage('db.transaction'):
-            with connection.transaction():
+        with sql_summary(), stage('db.transaction'):
+            with TimedExit(connection.transaction()):
+                backend_identity(connection)
                 yield connection
     finally:
         current.putconn(connection)
 
 def owned_attempt(c,attempt,uid):
-    return c.execute('select * from public.piano_attempts where id=%s and user_id=%s',(attempt,uid)).fetchone()
+    return sql(c, 'attempt.owned_select', 'select * from public.piano_attempts where id=%s and user_id=%s',(attempt,uid)).fetchone()
