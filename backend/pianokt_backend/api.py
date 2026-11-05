@@ -8,11 +8,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import httpx
+from contextlib import asynccontextmanager
+from functools import lru_cache
+from threading import Lock
+from .timing import stage, trace_id
 from fastapi import FastAPI,Depends,Header,HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel,Field
 from psycopg.types.json import Jsonb
-from .online import connect,owned_attempt
+from .online import connect,owned_attempt,close_pool,enable_pool
 from .storage import Objects
 from .contracts import check_midi,digest
 from .inference import DemoRecommender
@@ -22,8 +26,43 @@ from .activity import Activity, save_activity
 from .provenance import recording_environment
 from .upload_contracts import (Upload, Finalize, LocalAlignment, finite_number, local_alignment_lab_enabled, validate_alignment_window_settings, validate_performance_events, validate_finalization)
 
-app=FastAPI(title='PianoKT API',version='0.1.0')
-app.add_middleware(CORSMiddleware,allow_origins=os.getenv('FRONTEND_ORIGINS','http://localhost:5173').split(','),allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type'])
+@lru_cache(maxsize=1)
+def auth_client():
+    return httpx.Client(timeout=10, limits=httpx.Limits(max_connections=32, max_keepalive_connections=16))
+
+@asynccontextmanager
+async def lifespan(app):
+    enable_pool()
+    try:
+        yield
+    finally:
+        if auth_client.cache_info().currsize:
+            auth_client().close()
+        auth_client.cache_clear()
+        if objects.cache_info().currsize:
+            store = objects()
+            if store.bucket is not None:
+                store.bucket.client.close()
+        objects.cache_clear()
+        if signing_credentials.cache_info().currsize:
+            signing_credentials()[1].session.close()
+        signing_credentials.cache_clear()
+        close_pool()
+
+app=FastAPI(title='PianoKT API',version='0.1.0',lifespan=lifespan)
+
+@app.middleware('http')
+async def request_timing(request, call_next):
+    # Path has no query string, so signed credentials cannot enter these logs.
+    token = trace_id.set(str(uuid.uuid4()))
+    try:
+        with stage('http.' + request.method + '.' + request.url.path):
+            response = await call_next(request)
+            response.headers['X-Request-ID'] = trace_id.get()
+            return response
+    finally:
+        trace_id.reset(token)
+app.add_middleware(CORSMiddleware,allow_origins=os.getenv('FRONTEND_ORIGINS','http://localhost:5173').split(','),allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type'],expose_headers=['X-Request-ID'])
 
 def local_development_access_list_bypass_enabled():
     """Allow an authenticated local developer to bypass only the allow-list.
@@ -41,16 +80,37 @@ def local_development_access_list_bypass_enabled():
 def user(authorization:str=Header(...)):
     if not authorization.startswith('Bearer '): raise HTTPException(401,'Bearer token required')
     try:
-        r=httpx.get(os.environ['SUPABASE_URL'].rstrip('/')+'/auth/v1/user',headers={'Authorization':authorization,'apikey':os.environ['SUPABASE_ANON_KEY']},timeout=10)
+        with stage('auth.user'):
+            r=auth_client().get(os.environ['SUPABASE_URL'].rstrip('/')+'/auth/v1/user',headers={'Authorization':authorization,'apikey':os.environ['SUPABASE_ANON_KEY']},timeout=10)
         if r.status_code!=200: raise HTTPException(401,'Invalid session')
         if not local_development_access_list_bypass_enabled():
-            allowed=httpx.post(os.environ['SUPABASE_URL'].rstrip('/')+'/rest/v1/rpc/check_user_allowed',headers={'Authorization':authorization,'apikey':os.environ['SUPABASE_ANON_KEY']},json={},timeout=10)
+            with stage('auth.allowlist'):
+                allowed=auth_client().post(os.environ['SUPABASE_URL'].rstrip('/')+'/rest/v1/rpc/check_user_allowed',headers={'Authorization':authorization,'apikey':os.environ['SUPABASE_ANON_KEY']},json={},timeout=10)
             if allowed.status_code!=200: raise HTTPException(503,'Access policy unavailable')
             if allowed.json() is not True: raise HTTPException(403,'Account is not on the access list')
         return str(uuid.UUID(r.json()['id']))
     except httpx.HTTPError as exc: raise HTTPException(503,'Auth unavailable') from exc
 
+@lru_cache(maxsize=1)
 def objects(): return Objects(os.environ['RAW_ROOT'])
+
+_credentials_lock = Lock()
+
+@lru_cache(maxsize=1)
+def signing_credentials():
+    import google.auth
+    from google.auth.transport.requests import Request
+    credentials, _ = google.auth.default()
+    return credentials, Request()
+
+def signing_token():
+    from google.auth.credentials import TokenState
+    with _credentials_lock:
+        credentials, request = signing_credentials()
+        if credentials.token_state != TokenState.FRESH:
+            with stage('gcs.credentials_refresh'):
+                credentials.refresh(request)
+        return credentials.token
 
 def signed(key,method,content_type='audio/midi'):
     store=objects()
@@ -58,11 +118,9 @@ def signed(key,method,content_type='audio/midi'):
     kwargs=dict(version='v4',expiration=timedelta(minutes=10),method=method)
     if method=='PUT': kwargs.update(content_type=content_type,headers={'x-goog-if-generation-match':'0'})
     if os.getenv('SIGNING_SERVICE_ACCOUNT'):
-        import google.auth
-        from google.auth.transport.requests import Request
-        credentials,_=google.auth.default(); credentials.refresh(Request())
-        kwargs.update(service_account_email=os.environ['SIGNING_SERVICE_ACCOUNT'],access_token=credentials.token)
-    return store.bucket.blob(store._name(key)).generate_signed_url(**kwargs)
+        kwargs.update(service_account_email=os.environ['SIGNING_SERVICE_ACCOUNT'],access_token=signing_token())
+    with stage('gcs.sign'):
+        return store.bucket.blob(store._name(key)).generate_signed_url(**kwargs)
 
 @app.post('/activity')
 def activity(body:Activity,uid=Depends(user)):
@@ -123,41 +181,23 @@ def create_attempt(body:Upload,uid=Depends(user)):
         response['performance_events_url']=signed(row['performance_events_key'],'PUT','application/json')
     return response
 
-@app.post('/attempts/{attempt_id}/finalize')
+@app.post('/attempts/{attempt_id}/finalize', status_code=202)
 def finalize(attempt_id:uuid.UUID,body:Finalize,uid=Depends(user)):
-    with connect() as c: row=owned_attempt(c,attempt_id,uid)
-    if not row: raise HTTPException(404,'Attempt not found')
-    store=objects()
-    for kind in ('performance','reference'):
-        blob=store.bucket.blob(store._name(row[kind+'_key']))
-        try: blob.reload()
-        except Exception as exc: raise HTTPException(409,'Upload not complete') from exc
-        if blob.size>8_000_000: raise HTTPException(413,'MIDI exceeds 8 MB')
-        data=blob.download_as_bytes(if_generation_match=blob.generation)
-        if digest(data)!=row[kind+'_hash']: raise HTTPException(409,'Upload digest mismatch')
-        with TemporaryDirectory() as tmp:
-            p=Path(tmp)/'input.mid'; p.write_bytes(data)
-            try: check_midi(p)
-            except ValueError as exc: raise HTTPException(422,str(exc)) from exc
-    if row['performance_events_key']:
-        blob=store.bucket.blob(store._name(row['performance_events_key']))
-        try: blob.reload()
-        except Exception as exc: raise HTTPException(409,'Performance event upload not complete') from exc
-        if blob.size>4_000_000: raise HTTPException(413,'Performance event telemetry exceeds 4 MB')
-        data=blob.download_as_bytes(if_generation_match=blob.generation)
-        if digest(data)!=row['performance_events_hash']: raise HTTPException(409,'Performance event digest mismatch')
-        try: validate_performance_events(json.loads(data),row['performance_events_count'])
-        except json.JSONDecodeError as exc: raise HTTPException(422,'Invalid performance event telemetry JSON') from exc
-    validate_finalization(row,body,uid)
+    if body.schema_version != 3:
+        raise HTTPException(422, 'Async finalize requires schema_version=3; refresh the frontend')
+    # No GCS network operations here: DB commit is the durable handoff.
     with connect() as c:
+        row=owned_attempt(c,attempt_id,uid)
+        if not row: raise HTTPException(404,'Attempt not found')
         commit_finalization(c,row,uid,body)
-    return {'id':str(attempt_id)}
+        row=owned_attempt(c,attempt_id,uid)
+    return {'id':str(attempt_id),'status':row['status'],'validated_at':row['validated_at']}
 
 @app.get('/attempts/{attempt_id}')
 def status(attempt_id:uuid.UUID,uid=Depends(user)):
     with connect() as c: row=owned_attempt(c,attempt_id,uid)
     if not row: raise HTTPException(404,'Not found')
-    return {k:row[k] for k in ('id','status','summary','error_code','alignment_run_id')}
+    return {k:row[k] for k in ('id','status','summary','error_code','alignment_run_id','accepted_at','validated_at','validation_error','next_retry_at')}
 
 @app.get('/attempts/{attempt_id}/download')
 def download(attempt_id:uuid.UUID,kind:str='performance',uid=Depends(user)):

@@ -106,6 +106,10 @@ def test_actual_context_query_and_finalize_keeps_multiple_logs(db):
         body.activity.events[0].event_id=UUID(f'50000000-0000-0000-0000-{i:012}')
         body.activity.events[1].event_id=UUID(f'60000000-0000-0000-0000-{i:012}')
         commit_finalization(db,new_upload(db,aid),U,body)
+        assert db.execute('select count(*)::int n from user_play_logs where session_id=%s',(aid,)).fetchone()['n']==0
+        from pianokt_backend.projections import rebuild_projections
+        db.execute('update piano_attempts set validated_at=now() where id=%s',(aid,))
+        rebuild_projections(db,aid)
     assert db.execute('select count(*)::int n from user_play_logs').fetchone()['n']==2
     assert float(db.execute('select days_since_signup from user_play_logs limit 1').fetchone()['days_since_signup'])>0
     context=read_context(db,utc('2099-01-01T00:00:00Z'))
@@ -131,6 +135,8 @@ def test_legacy_event_rpc_is_retired(db):
 
 def test_leaderboard_excludes_pending_and_client_scores(db):
     db.execute("insert into challenge_recordings(id,user_id,accuracy_pct,score_source,source_environment) values(%s,%s,100,'pending','production'),(%s,%s,40,'aligned','production'),(%s,%s,95,'legacy','unknown')",(A,U,V,U,OTHER,U))
+    new_upload(db,A); new_upload(db,V)
+    db.execute('update piano_attempts set validated_at=now()')
     row=db.execute("select * from get_leaderboard('accuracy')").fetchone()
     assert float(row['accuracy_avg'])==40 and row['challenge_count']==2
 
@@ -151,7 +157,7 @@ def test_finalize_is_atomic_and_immutable_on_retry(db):
     db.execute('alter table challenge_recordings drop constraint injected_failure')
     db.execute('begin'); commit_finalization(db,row,U,body); db.execute('commit')
     db.execute('begin'); commit_finalization(db,row,U,body); db.execute('commit')
-    assert db.execute("select count(*)::int n from piano_outbox where event_type='performance.uploaded'").fetchone()['n']==1
+    assert db.execute("select count(*)::int n from piano_outbox where event_type='performance.submitted'").fetchone()['n']==1
     assert db.execute('select score_source from challenge_recordings').fetchone()['score_source']=='pending'
     assert db.execute('select count(*)::int n from play_events_raw').fetchone()['n']==0
     seal=db.execute('select sealed_at,sealed_event_count from student_attempts').fetchone()
@@ -225,7 +231,7 @@ def full_packet(aid=A):
     body=packet(attempt=aid)
     body.events.append(packet(2,event_sequence=1,event_type='finished',attempt=aid).events[0])
     body.events[-1].metadata={'success':True}
-    return Finalize(schema_version=2,activity=body)
+    return Finalize(schema_version=3,activity=body)
 
 
 def new_upload(db,aid=A):
@@ -281,7 +287,7 @@ def test_projection_rebuild_preserves_client_outcome_separate_from_grade(db):
     from pianokt_backend.upload_service import commit_finalization
     from pianokt_backend.projections import rebuild_projections
     commit_finalization(db,new_upload(db),U,full_packet())
-    db.execute("update piano_attempts set status='READY',summary='{\"alignment_quality_valid\":true,\"accuracy\":0.4}'")
+    db.execute("update piano_attempts set status='READY',validated_at=now(),summary='{\"alignment_quality_valid\":true,\"accuracy\":0.4}'")
     db.execute('delete from user_play_logs')
     db.execute('delete from challenge_recordings')
     rebuild_projections(db,A)
@@ -326,12 +332,12 @@ def test_http_v2_upload_finalize_without_live_activity_and_digest_retry(db,monke
                     performance_hash=digest(midi),reference_hash=digest(midi),duration_sec=10)
         assert client.post('/attempts',json=upload).status_code==200
         body=full_packet().model_dump(mode='json')
-        blob.data=b'wrong'
-        assert client.post(f'/attempts/{A}/finalize',json=body).status_code==409
-        assert db.execute('select status from piano_attempts').fetchone()['status']=='CREATED'
-        blob.data=midi
-        assert client.post(f'/attempts/{A}/finalize',json=body).status_code==200
-        assert client.post(f'/attempts/{A}/finalize',json=body).status_code==200
+        monkeypatch.setattr(api, 'objects', lambda: pytest.fail('async finalize must not access GCS'))
+        old={**body,'schema_version':2}
+        assert client.post(f'/attempts/{A}/finalize',json=old).status_code==422
+        assert client.post(f'/attempts/{A}/finalize',json=body).status_code==202
+        assert db.execute('select status from piano_attempts').fetchone()['status']=='ACCEPTED'
+        assert client.post(f'/attempts/{A}/finalize',json=body).status_code==202
         assert client.post('/activity',json=body['activity']).status_code==200
         assert db.execute('select count(*)::int n from play_events_raw').fetchone()['n']==0
         body['activity']['events'][-1]['elapsed_playing_sec']=2

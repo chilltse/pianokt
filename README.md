@@ -24,3 +24,5 @@ PianoKT 是一个浏览器钢琴练习应用。前端负责 MIDI 输入、乐谱
 ### Challenge 数据架构 v2
 
 当前上传协议为 v2，需 migration 016。参阅 [架构与数据流](docs/ARCHITECTURE_ZH.md)、[Supabase/GCS 完整字段字典](docs/DATA_CONTRACT_V2_ZH.md)、[升级步骤和注意事项](docs/DEPLOYMENT_AND_ROADMAP_ZH.md)。默认研究导出为 Direct + production；旧浏览器队列不自动转换。
+
+- [异步 finalize v3：状态、恢复和 migration 017 部署](docs/ASYNC_FINALIZATION_ZH.md)

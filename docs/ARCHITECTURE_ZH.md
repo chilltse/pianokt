@@ -1,6 +1,8 @@
 # PianoKT 当前工程架构
 
-更新：2026-11-04；代码与 migration 016。云端需按部署手册应用迁移和发布。完整字段见 [数据字典](DATA_CONTRACT_V2_ZH.md)，实施决策见 [v2 精简结果](pianokt_data_architecture_simplification_plan.md)。
+2026-11-05 最新架构：异步 finalize v3 + migration 017，详见 [异步接收与部署](ASYNC_FINALIZATION_ZH.md)。此前性能优化见 [计时说明](UPLOAD_PERFORMANCE_ZH.md)。
+
+更新：2026-11-05；代码与 migration 017。云端需按部署手册应用迁移和发布。完整字段见 [数据字典](DATA_CONTRACT_V2_ZH.md)，实施决策见 [v2 精简结果](pianokt_data_architecture_simplification_plan.md)。
 
 ## 1. 系统分工
 
@@ -15,8 +17,8 @@
 3. 正常结束或主动退出后，先将 owner、完整 Activity、MIDI、参考快照、遥测和设置封存到 IndexedDB v2。
 4. POST `/attempts` 登记文件摘要，得到 GCS create-only 签名 URL；创建状态为 CREATED。此接口不写演奏事件。
 5. 浏览器 PUT performance.mid、reference.mid、performance-events.json。412 只代表对象存在，最终仍由服务端核验摘要。
-6. POST `/attempts/{id}/finalize` 提交 `{schema_version:2, activity}`。服务端验证文件、时间轴和完整事件序列，在同一事务调用 Activity 幂等写入、封存、设置 UPLOADED、生成投影和 performance.uploaded outbox。
-7. Relay 至少一次投递 Pub/Sub；私有 Worker 通过租约领取任务、核验原始证据、创建不可变 Result，然后原子提交 READY、result_digest/result_committed_at、正式分数和 alignment.completed outbox。
+6. POST `/attempts/{id}/finalize` 提交 `{schema_version:3, activity}`。API 不读取 GCS，原子封存事件、写 ACCEPTED/录音列表/performance.submitted outbox，提交后返回 202。
+7. Relay 每分钟派发并扫描补偿。Worker 验证文件和侧车，固定 generation，记录 validated_at 并生成 user_play_logs；复用文件进行对齐，再提交 READY/Result/正式分数。无效内容 INVALID，暂时错误 RETRY，最多 8 次尝试。
 8. Direct Export 在一个短 repeatable-read 事务内取得同环境上下文和 READY 指针；离开事务后读取 GCS、验证摘要和身份、应用质量门，最后发布不可变数据集。
 
 ## 3. 事实、状态与投影
@@ -36,16 +38,15 @@
 ## 4. 状态机与失败恢复
 
 ```text
-CREATED → UPLOADED → PROCESSING → READY
-                         └──────→ FAILED → PROCESSING
-PROCESSING 超过租约期限也可重新领取
+CREATED → ACCEPTED → VALIDATING → PROCESSING → READY
+                       └→ INVALID / RETRY → 重试（上限 8 次）→ FAILED
 ```
 
-CREATED 的文件可能只上传一部分；UPLOADED 表示原始证据及周期已原子提交；READY 表示处理完成，不等于质量通过。失败保留文件和队列，使用相同身份重试。Worker 以 lease_token 防止失效任务覆盖新提交。
+ACCEPTED 是持久接收，validated_at 才表示文件验证通过，READY 是评分结果提交。文件校验后才生成演奏汇总，榜单也要求 validated_at；生命周期事件仍保留所有真实演奏事实。
 
-浏览器只在 finalize 成功后删除 v2 Bundle。IndexedDB 失败时保留内存并阻止常规离页；未落盘前的断电无法恢复。浏览器关闭后不运行上传，下一次登录同一账号才恢复。
+浏览器收到 202 后保留本地 Bundle，恢复时查询状态而不重复上传；validated_at 有值才删除。服务端接收后关页不影响持久任务；接收前需同浏览器同账号恢复。签名与 GCS/DB 没有跨系统事务，状态和补偿扫描定义恢复边界。
 
-实时 Activity 与 finalize 使用同一个 attempt 锁和事件写入器。封存后允许相同事件重试，拒绝新增或修改；已有 interrupted 不可被 finished 包覆盖。数据库、GCS、Pub/Sub 没有跨系统事务，读取者必须以数据库 READY/UPLOADED 和数据集 Manifest 作为提交边界。
+实时 Activity 与 finalize 使用同一个 attempt 锁和事件写入器。封存后允许相同事件重试，拒绝新增或修改；已有 interrupted 不可被 finished 包覆盖。数据库、GCS、Pub/Sub 没有跨系统事务，读取者必须以数据库 ACCEPTED/validated_at/READY 和数据集 Manifest 作为提交边界。
 
 ## 5. 环境与研究语义
 

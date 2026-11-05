@@ -1,4 +1,5 @@
 """Durable visit/attempt history, independent of MIDI finalization."""
+from .timing import stage
 import json
 import logging
 from typing import Literal
@@ -47,7 +48,8 @@ def save_activity(c, uid, body):
     if str(body.owner_id) != str(uid):
         raise HTTPException(403, 'Activity belongs to another signed-in user')
     if body.attempt is not None:
-        c.execute('select pg_advisory_xact_lock(hashtext(%s))',(str(body.attempt.attempt_id),))
+        with stage('db.attempt_lock'):
+            c.execute('select pg_advisory_xact_lock(hashtext(%s))',(str(body.attempt.attempt_id),))
     environment = recording_environment()
     v = body.visit
     c.execute('insert into public.piano_learner_keys(user_id) values(%s) on conflict do nothing', (uid,))

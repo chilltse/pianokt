@@ -1,5 +1,7 @@
 # PianoKT 当前实现参考
 
+异步提交更新（2026-11-05）：finalize 已改为 schema_version=3、202 持久接收；文件验证在 Worker，部署需 017。旧同步流程描述由 [异步接收文档](ASYNC_FINALIZATION_ZH.md) 覆盖。
+
 更新日期：2026-11-04。依据当前工作区源码和 migration 001–016 整理。本文件说明“代码实际如何连接”，运行与部署步骤见 [部署手册](DEPLOYMENT_AND_ROADMAP_ZH.md)。先理解整体可读 [架构总览](ARCHITECTURE_ZH.md)。
 
 当前主路径为 Challenge v2 单表事件权威 + Direct Export。完整数据库字段、GCS 对象和数据流以 [v2 数据字典](DATA_CONTRACT_V2_ZH.md) 和 [架构总览](ARCHITECTURE_ZH.md) 为准。下面保留算法、模块和可选 Lake 的实现参考。升级需先执行 migration 016，再协调发布 API/Worker/前端；旧上传契约不自动转换。

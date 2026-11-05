@@ -1,5 +1,7 @@
 # 登录、权限与 Challenge 录音
 
+异步提交更新（2026-11-05）：finalize 已改为 schema_version=3、202 持久接收；文件验证在 Worker，部署需 017。旧同步流程描述由 [异步接收文档](ASYNC_FINALIZATION_ZH.md) 覆盖。
+
 更新日期：2026-11-03。本文对应当前 Supabase + FastAPI + 私有 GCS 实现；整体关系见 [架构总览](ARCHITECTURE_ZH.md)。数据库定义以 migrations 为准，不再在文档复制一套可能覆盖新函数的旧 SQL。
 
 ## 1. 三类权限各管什么

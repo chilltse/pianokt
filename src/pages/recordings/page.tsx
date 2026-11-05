@@ -1,11 +1,11 @@
 import { AppBar } from '@/components'
-import { Recommendations } from '@/features/challenge-history/Recommendations'
 import { useRequireAuth } from '@/features/auth'
 import {
   getChallengeRecordingDownloadUrl,
   listChallengeRecordings,
   type ChallengeRecordingRow,
 } from '@/features/challenge-history'
+import { Recommendations } from '@/features/challenge-history/Recommendations'
 import { Download } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router'
@@ -41,13 +41,17 @@ export default function RecordingsPage() {
     let cancelled = false
     setLoading(true)
     setError(null)
-    listChallengeRecordings().then((result) => {
-      if (cancelled) return
-      setLoading(false)
-      if ('error' in result) setError(result.error)
-      else setRows(result.data)
-    })
+    const refresh = () =>
+      listChallengeRecordings().then((result) => {
+        if (cancelled) return
+        setLoading(false)
+        if ('error' in result) setError(result.error)
+        else setRows(result.data)
+      })
+    void refresh()
+    const timer = window.setInterval(refresh, 15_000)
     return () => {
+      window.clearInterval(timer)
       cancelled = true
     }
   }, [user?.id])
@@ -66,7 +70,7 @@ export default function RecordingsPage() {
     return (
       <>
         <AppBar />
-        <div className="flex min-h-screen items-center justify-center bg-paper bg-amber-50/70">
+        <div className="bg-paper flex min-h-screen items-center justify-center bg-amber-50/70">
           <p className="text-gray-500">Loading…</p>
         </div>
       </>
@@ -76,56 +80,81 @@ export default function RecordingsPage() {
   return (
     <>
       <AppBar />
-      <div className="bg-paper bg-amber-50/70 min-h-screen">
+      <div className="bg-paper min-h-screen bg-amber-50/70">
         <div className="mx-auto max-w-2xl px-4 py-8">
-        <h1 className="text-2xl font-semibold text-gray-900">My challenge recordings</h1>
-        <Recommendations />
-        <p className="mt-1 text-sm text-gray-600">
-          Recordings from Challenge mode are saved here when you’re logged in.
-        </p>
-        {loading ? (
-          <p className="mt-6 text-gray-500">Loading…</p>
-        ) : error ? (
-          <p className="mt-6 text-red-600">{error}</p>
-        ) : rows.length === 0 ? (
-          <>
-            <p className="mt-6 text-gray-500">No recordings yet. Complete a challenge while logged in to save one.</p>
-            <Link to="/songs" className="mt-4 inline-block text-stone-600 hover:text-stone-800 hover:underline">
-              Go to songs
-            </Link>
-          </>
-        ) : (
-          <ul className="mt-6 space-y-3">
-            {rows.map((row) => (
-              <li
-                key={row.id}
-                className="flex items-center justify-between rounded-lg border border-amber-100 bg-white px-4 py-3 shadow-sm"
+          <h1 className="text-2xl font-semibold text-gray-900">My challenge recordings</h1>
+          <Recommendations />
+          <p className="mt-1 text-sm text-gray-600">
+            Recordings from Challenge mode are saved here when you’re logged in.
+          </p>
+          {loading ? (
+            <p className="mt-6 text-gray-500">Loading…</p>
+          ) : error ? (
+            <p className="mt-6 text-red-600">{error}</p>
+          ) : rows.length === 0 ? (
+            <>
+              <p className="mt-6 text-gray-500">
+                No recordings yet. Complete a challenge while logged in to save one.
+              </p>
+              <Link
+                to="/songs"
+                className="mt-4 inline-block text-stone-600 hover:text-stone-800 hover:underline"
               >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium text-gray-900">
-                    {row.song_title || `${row.song_source} / ${row.song_id.slice(0, 12)}…`}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    {formatDate(row.created_at)} · {formatDuration(Number(row.duration_sec))}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleDownload(row)}
-                  className="ml-4 flex items-center gap-1 rounded-md border border-amber-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-amber-50"
+                Go to songs
+              </Link>
+            </>
+          ) : (
+            <ul className="mt-6 space-y-3">
+              {rows.map((row) => (
+                <li
+                  key={row.id}
+                  className="flex items-center justify-between rounded-lg border border-amber-100 bg-white px-4 py-3 shadow-sm"
                 >
-                  <Download className="h-4 w-4" />
-                  Download
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="mt-8">
-          <Link to="/" className="text-sm text-stone-600 hover:text-stone-800 hover:underline">
-            Back to home
-          </Link>
-        </p>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium text-gray-900">
+                      {row.song_title || `${row.song_source} / ${row.song_id.slice(0, 12)}…`}
+                    </p>
+                    {row.upload_status && (
+                      <p className="text-sm text-gray-600">
+                        {(
+                          {
+                            ACCEPTED: 'Cloud received · awaiting validation',
+                            VALIDATING: 'Validating files',
+                            PROCESSING: 'Files saved · scoring',
+                            RETRY: 'Temporary error · retry scheduled',
+                            INVALID: 'Validation failed · local recovery copy retained',
+                            FAILED: 'Processing failed · support required',
+                            READY: 'Ready',
+                            UPLOADED: 'Files saved · awaiting processing',
+                          } as Record<string, string>
+                        )[row.upload_status] ?? row.upload_status}
+                        {row.validation_error && (
+                          <span className="block text-red-700">{row.validation_error}</span>
+                        )}
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-500">
+                      {formatDate(row.created_at)} · {formatDuration(Number(row.duration_sec))}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(row)}
+                    disabled={Boolean(row.upload_status && !row.validated_at)}
+                    className="ml-4 flex items-center gap-1 rounded-md border border-amber-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-amber-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    Download
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-8">
+            <Link to="/" className="text-sm text-stone-600 hover:text-stone-800 hover:underline">
+              Back to home
+            </Link>
+          </p>
         </div>
       </div>
     </>

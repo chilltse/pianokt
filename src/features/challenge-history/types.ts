@@ -9,6 +9,9 @@ export type ChallengeRecordingRow = {
   created_at: string
   accuracy_pct?: number
   client_accuracy_pct?: number | null
+  upload_status?: string
+  validated_at?: string | null
+  validation_error?: string | null
   score_source?: 'legacy' | 'pending' | 'aligned' | 'rejected'
   difficulty?: number
   midi_keyboard_used?: boolean

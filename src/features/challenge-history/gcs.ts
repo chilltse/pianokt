@@ -5,6 +5,35 @@ import { indexedUploadStore, UploadQueue, type PendingUpload } from './upload-qu
 const apiRoot = (import.meta.env.VITE_PIANOKT_API_URL as string | undefined)?.replace(/\/$/, '')
 export const localAlignmentLabEnabled =
   import.meta.env.DEV && import.meta.env.VITE_LOCAL_ALIGNMENT_LAB === 'true'
+async function timedRequest(label: string, url: string, options: RequestInit) {
+  const start = performance.now()
+  try {
+    const response = await fetch(url, { ...options, signal: AbortSignal.timeout(120_000) })
+    const requestId = response.headers.get('X-Request-ID')
+    if (requestId) console.debug('[Upload request]', label, requestId)
+    return response
+  } finally {
+    console.debug('[Upload timing]', label, Math.round(performance.now() - start), 'ms')
+  }
+}
+
+export class BackendError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
+type CloudReceipt = {
+  id: string
+  status: string
+  validated_at: string | null
+  validation_error?: string | null
+  error_code?: string | null
+}
+
 export async function backendRequest<T>(
   path: string,
   body?: unknown,
@@ -17,7 +46,7 @@ export async function backendRequest<T>(
   if (!session) throw new Error('Not authenticated')
   if (expectedOwner && session.user.id !== expectedOwner)
     throw new Error('Upload belongs to another signed-in user')
-  const response = await fetch(apiRoot + path, {
+  const response = await timedRequest(path, apiRoot + path, {
     method: body === undefined ? 'GET' : 'POST',
     headers: {
       Authorization: `Bearer ${session.access_token}`,
@@ -25,7 +54,8 @@ export async function backendRequest<T>(
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
-  if (!response.ok) throw new Error(`Backend ${response.status}: ${await response.text()}`)
+  if (!response.ok)
+    throw new BackendError(response.status, `Backend ${response.status}: ${await response.text()}`)
   return response.json() as Promise<T>
 }
 
@@ -97,12 +127,33 @@ async function uploadSealedRecording(
   params: RecordingUpload,
   ownerId: string,
   attemptId: string,
-): Promise<{ id: string } | { error: string }> {
+): Promise<{ id: string; validated?: boolean } | { error: string }> {
   try {
+    // The durable server receipt survives reloads and lost finalize responses.
+    // Poll accepted uploads instead of uploading/signing them again.
+    try {
+      const receipt = await backendRequest<CloudReceipt>(
+        `/attempts/${attemptId}`,
+        undefined,
+        ownerId,
+      )
+      if (receipt.status === 'INVALID' || receipt.status === 'FAILED') {
+        if (receipt.validated_at) return { id: attemptId, validated: true }
+        console.warn('[Upload recovery]', attemptId, receipt.validation_error ?? receipt.status)
+        return { id: attemptId, validated: false }
+      }
+      const missingFile =
+        receipt.status === 'RETRY' &&
+        !receipt.validated_at &&
+        ['NotFound', 'FileNotFoundError'].includes(receipt.error_code ?? '')
+      if (receipt.status !== 'CREATED' && !missingFile)
+        return { id: attemptId, validated: Boolean(receipt.validated_at) }
+    } catch (error) {
+      if (!(error instanceof BackendError) || error.status !== 404) throw error
+    }
     const performance = decode(params.midiBase64),
       reference = decode(params.referenceMidiBase64)
-    const performanceHash = await hash(performance),
-      referenceHash = await hash(reference)
+    const [performanceHash, referenceHash] = await Promise.all([hash(performance), hash(reference)])
     const performanceEvents = params.performanceEvents
     const performanceEventsBytes = performanceEvents
       ? new TextEncoder().encode(JSON.stringify(performanceEvents))
@@ -153,21 +204,25 @@ async function uploadSealedRecording(
         contentType: 'application/json',
       })
     }
-    for (const { url, bytes, contentType } of uploads) {
-      const response = await fetch(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': contentType, 'x-goog-if-generation-match': '0' },
-        body: new Uint8Array(bytes),
-      })
-      if (!response.ok && response.status !== 412)
-        throw new Error(`MIDI upload failed: ${response.status}`)
-    }
-    const result = await backendRequest<{ id: string }>(
+    const outcomes = await Promise.allSettled(
+      uploads.map(async ({ url, bytes, contentType }, index) => {
+        const response = await timedRequest(`put.${attemptId}.${index}`, url, {
+          method: 'PUT',
+          headers: { 'Content-Type': contentType, 'x-goog-if-generation-match': '0' },
+          body: new Uint8Array(bytes),
+        })
+        if (!response.ok && response.status !== 412)
+          throw new Error(`MIDI upload failed: ${response.status}`)
+      }),
+    )
+    const failure = outcomes.find((outcome) => outcome.status === 'rejected')
+    if (failure?.status === 'rejected') throw failure.reason
+    const result = await backendRequest<CloudReceipt>(
       `/attempts/${attemptId}/finalize`,
-      { schema_version: 2, activity: params.activity },
+      { schema_version: 3, activity: params.activity },
       ownerId,
     )
-    return result
+    return { id: result.id, validated: Boolean(result.validated_at) }
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Upload failed' }
   }
@@ -191,6 +246,7 @@ function uploadQueue() {
   return (queue ??= new UploadQueue(indexedUploadStore<RecordingUpload>(), async (record) => {
     const result = await uploadSealedRecording(record.payload, record.ownerId, record.id)
     if ('error' in result) throw new Error(result.error)
+    return result.validated === true
   }))
 }
 
@@ -220,8 +276,15 @@ export async function saveGcsRecording(
 }
 
 let replaying = false
+let replayRequested = false
+let replayOwner: string | undefined
 export async function resumePendingUploads(ownerId: string) {
-  if (replaying || !apiRoot || localAlignmentLabEnabled) return
+  if (!apiRoot || localAlignmentLabEnabled) return
+  replayOwner = ownerId
+  if (replaying) {
+    replayRequested = true
+    return
+  }
   replaying = true
   try {
     for (const [key, record] of unsealed) {
@@ -232,8 +295,11 @@ export async function resumePendingUploads(ownerId: string) {
         console.warn('[Upload recovery] Retry pending', error)
       }
     }
-    const failures = await uploadQueue().replay(ownerId)
-    if (failures.length) console.warn('[Upload recovery] Bundles retained for retry', failures)
+    do {
+      replayRequested = false
+      const failures = await uploadQueue().replay(replayOwner ?? ownerId)
+      if (failures.length) console.warn('[Upload recovery] Bundles retained for retry', failures)
+    } while (replayRequested)
   } catch (error) {
     console.error('[Upload recovery] Persistence unavailable', error)
   } finally {

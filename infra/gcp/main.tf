@@ -214,7 +214,7 @@ resource "google_pubsub_topic_iam_member" "dead_publish" {
 resource "google_pubsub_subscription" "worker" {
   name                 = "pianokt-alignment-worker"
   topic                = google_pubsub_topic.events.id
-  filter               = "attributes.event_type = \"performance.uploaded\""
+  filter               = "attributes.event_type = \"performance.uploaded\" OR attributes.event_type = \"performance.submitted\""
   ack_deadline_seconds = 600
   expiration_policy { ttl = "" }
   push_config {
@@ -297,8 +297,8 @@ output "api_url" { value = google_cloud_run_v2_service.app["api"].uri }
 
 variable "relay_schedule" {
   type        = string
-  default     = "0 10,23 * * *"
-  description = "Outbox relay schedule (Asia/Tokyo); use */5 * * * * for interactive processing."
+  default     = "* * * * *"
+  description = "Outbox dispatch and recovery every minute; accepted recordings may queue until the next run."
 }
 variable "pipeline_schedule" {
   type        = string

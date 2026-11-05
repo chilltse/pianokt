@@ -24,6 +24,8 @@ def project_challenge(c, row, body):
          str(row['metadata']['duration_sec']), f"gcs:{row['id']}", bool(settings.get('midi_keyboard_used', False)),
          str(score), str(settings.get('client_difficulty') or 0),
          str(settings['client_accuracy_pct']) if settings.get('client_accuracy_pct') is not None else None, score_source, row['source_environment']))
+    if not row.get('validated_at'):
+        return
     existing = c.execute('select user_id,challenge_recording_id from public.user_play_logs where session_id=%s for update', (row['id'],)).fetchone()
     if existing and (str(existing['user_id']) != str(row['user_id']) or
                      (existing['challenge_recording_id'] and str(existing['challenge_recording_id']) != str(row['id']))):

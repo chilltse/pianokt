@@ -1,10 +1,12 @@
 # PianoKT v2 数据字典与流向
 
-更新：2026-11-04。描述**代码 + migration 016 的目标结构**；本次没有在远端执行 migration 或删除对象。字段依据 migrations、API 模型和 Worker/Export 写入器。`?` 表示可空；未带 `?` 的 JSON 属性仍需以对应版本契约为准。
+2026-11-05 最新架构：异步 finalize v3 + migration 017，详见 [异步接收与部署](ASYNC_FINALIZATION_ZH.md)。此前性能优化见 [计时说明](UPLOAD_PERFORMANCE_ZH.md)。
+
+更新：2026-11-04。描述**代码 + migration 017 的目标结构**；本次没有在远端执行 migration 或删除对象。字段依据 migrations、API 模型和 Worker/Export 写入器。`?` 表示可空；未带 `?` 的 JSON 属性仍需以对应版本契约为准。
 
 ## 1. 版本和身份
 
-- 上传/最终提交协议：`schema_version=2`。前端本地 Bundle：`schemaVersion=2`。
+- 创建上传：`schema_version=2`；异步 finalize：`schema_version=3`。前端本地 Bundle：`schemaVersion=2`。
 - 按键侧车：`schemaVersion=1`；Result：`schema_version=3`；attempt 数据集 Manifest：`schema_version=1.3`；教育标签：v1.1。
 - `attempt_id = piano_attempts.id = student_attempts.attempt_id = challenge_recordings.id = user_play_logs.session_id`，适用于 v2。不再要求客户端另传 session_id。
 - 研究用户是 `learner_key`，不是 Auth UUID；这是可受控回连的假名化。
@@ -77,7 +79,12 @@
 | performance_hash / reference_hash | text，SHA-256 |
 | performance_events_key / performance_events_hash | text? / text?，按键侧车身份 |
 | performance_events_count | integer?，按键事件数量 0..50000，侧车三个字段同有/同无 |
-| status | text：CREATED / UPLOADED / PROCESSING / READY / FAILED |
+| status | text：CREATED / ACCEPTED / VALIDATING / UPLOADED（历史）/ PROCESSING / RETRY / INVALID / READY / FAILED |
+| accepted_at / validated_at | timestamptz? / timestamptz?，持久接收/文件验证通过 |
+| file_generations | jsonb?，各原始文件固定的 GCS generation |
+| processing_attempts | integer，领取处理次数，最多 8 次尝试 |
+| next_retry_at | timestamptz?，最早重试时间 |
+| validation_error | text?，永久文件校验错误 |
 | finalization | jsonb?，完整 v2 Finalize 请求，首次成功后不可变 |
 | result_key / alignment_run_id | text? / text?，当前已提交结果指针 |
 | result_digest | text?，Result 原始规范 JSON 字节的 SHA-256 |
@@ -92,7 +99,7 @@
 
 `settings` 当前前端提供：range、assigned_range、observed_range（均为 start/end）、reference_time_origin_sec、waiting、transpose、time_basis、played_until_sec、left、right、client_accuracy_pct、client_difficulty、midi_keyboard_used。它们是被冻结的观测/设置，不代表服务端签发的考试任务。
 
-`finalization = {schema_version: 2, activity: {owner_id, visit, attempt, events}}`；Visit/Attempt/Event 的客户端字段见第 4 节。保留这份封存身份是为了幂等提交和投影重建，不是第二个可独立修改的事件写入接口。
+`finalization = {schema_version: 3, activity: {owner_id, visit, attempt, events}}`；Visit/Attempt/Event 的客户端字段见第 4 节。保留这份封存身份是为了幂等提交和投影重建，不是第二个可独立修改的事件写入接口。
 
 ### challenge_recordings — 列表与评分投影
 
@@ -110,7 +117,7 @@
 | source_environment | text，派生自 piano_attempts |
 | created_at | timestamptz |
 
-公开榜单仅纳入 production；挑战次数统计已 finalize 的这些录音，正确率只聚合 aligned。质量拒绝不等于失败事务。客户端不能独立写权威投影；旧 save_challenge_recording RPC 的所有重载已撤销客户端执行权限。
+公开榜单仅纳入 production；挑战次数只统计对应 Attempt 已有 validated_at 的录音，正确率只聚合 aligned。质量拒绝不等于失败事务。客户端不能独立写权威投影；旧 save_challenge_recording RPC 的所有重载已撤销客户端执行权限。
 
 ### user_play_logs — 最终周期汇总投影
 
@@ -131,7 +138,7 @@
 | projection_version | integer，v2 为 2，旧记录默认 1 |
 | created_at / updated_at | timestamptz |
 
-环境从相同 ID 的 Attempt 继承。`exit_status` 是客户端判定，不会被 Worker 评分覆盖。写 numeric 汇总时使用完整十进制字符串，避免 float8 隐式转换舍入。重建命令不改变源事件和处理状态。
+新汇总仅在 Worker 文件验证通过后创建；ACCEPTED 阶段没有 user_play_logs。环境从相同 ID 的 Attempt 继承。`exit_status` 是客户端判定，不会被 Worker 评分覆盖。写 numeric 汇总时使用完整十进制字符串，避免 float8 隐式转换舍入。重建命令不改变源事件和处理状态。
 
 ### piano_outbox — 原子事务消息
 
@@ -139,7 +146,7 @@
 
 新 Challenge 消息：
 
-- performance.uploaded：attempt_id、learner_key、source_environment，事务提交后才能发布。
+- performance.submitted（历史为 performance.uploaded）：attempt_id、learner_key、source_environment，事务提交后才能发布。
 - alignment.completed：attempt_id、alignment_run_id、result_key、source_environment。
 - recommendation.impression/click：既有推荐反馈。
 
@@ -181,13 +188,13 @@ Relay 增补 event_id/event_type，发布成功再记 published_at；允许重�
 
 `POST /attempts`：`schema_version=2` 加 piano_attempts.metadata 所列上传字段。后端返回 attempt_id、performance_url、reference_url，以及提供侧车时的 performance_events_url。未知字段（例如旧 session_id/activity）拒绝。
 
-`POST /attempts/{id}/finalize`：`{schema_version:2, activity:完整封存Activity}`。activity 必须有 Attempt 和至少首尾两个事件；只出现一次 finished/exited 终止。字段来源和实时包完全相同。
+`POST /attempts/{id}/finalize`：`{schema_version:3, activity:完整封存Activity}`，返回 202 `{id,status,validated_at}`，不访问 GCS。activity 必须有 Attempt 和至少首尾两个事件；只出现一次 finished/exited 终止。字段来源和实时包完全相同。
 
 ## 5. GCS raw：对象，不是 SQL 表
 
 | 对象 Key | 内容 / 字段 | 写入与读取 |
 |---|---|---|
-| midi/{learner_key}/{attempt_id}/performance.mid | 演奏 MIDI 二进制 | 浏览器 create-only PUT；finalize + Worker核验 SHA-256 |
+| midi/{learner_key}/{attempt_id}/performance.mid | 演奏 MIDI 二进制 | 浏览器 create-only PUT；Worker核验 SHA-256/大小/格式并固定 generation |
 | midi/{learner_key}/{attempt_id}/reference.mid | 冻结设置和观察范围裁剪的参考 MIDI | 同上，本次不改参考证据策略 |
 | midi/{learner_key}/{attempt_id}/performance-events.json | schemaVersion、events、transportSegments | 浏览器整体封存；高频证据不逐条入 PostgreSQL |
 | matching/{alignment_run_id}/matches.json | attempt_id、score_version、performance_hash、config、matcher_version、alignment_context、raw_matches | 对齐阶段审计输出 |

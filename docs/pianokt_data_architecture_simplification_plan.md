@@ -1,12 +1,14 @@
 # PianoKT 数据架构精简：v2 实施结果与决策
 
+2026-11-05 最新架构：异步 finalize v3 + migration 017，详见 [异步接收与部署](ASYNC_FINALIZATION_ZH.md)。此前性能优化见 [计时说明](UPLOAD_PERFORMANCE_ZH.md)。
+
 更新：2026-11-04。本文已从讨论方案更新为当前代码实践，对应 migration `016_challenge_event_authority.sql`。**代码已实现，不表示目标 Supabase/GCP 已部署。** 完整字段见 [数据字典](DATA_CONTRACT_V2_ZH.md)，上线步骤见 [部署手册](DEPLOYMENT_AND_ROADMAP_ZH.md)。
 
 ## 1. 已落实的取舍
 
 - Challenge 生命周期事件唯一权威表为 `student_attempt_events`。`/activity` 和 finalize 都调用 `save_activity()`，不再将同一事件写进 `play_events_raw`。
 - `/attempts` 只登记文件身份与 CREATED 任务；不再接收 `activity` 或 `session_id`。新协议必须明确 `schema_version: 2`。
-- finalize 接收 `{schema_version: 2, activity: {owner_id, visit, attempt, events}}`。它在同一事务补齐上下文/事件、核验完整序列、封存、更新 UPLOADED、更新读模型、写 outbox。
+- finalize 接收 `{schema_version: 3, activity: {owner_id, visit, attempt, events}}`。它在同一事务补齐上下文/事件、核验完整序列、封存、更新 ACCEPTED、更新录音列表、写 outbox，返回 202；文件校验和演奏汇总延后到 Worker。
 - 事件只有一套字段：`event_sequence`、`occurred_at`、`song_time_sec`、`elapsed_playing_sec` 等。累计演奏时间不再从任意 metadata 回退推断。
 - `student_attempts` 与 `piano_attempts` 分开保留：开始过演奏不等于已有可上传录音。
 - `challenge_recordings` 与 `user_play_logs` 保留为可重建投影。新增 `rebuild-projections --attempt-id UUID`，从 v2 封存输入和当前处理结果重建。
@@ -27,9 +29,9 @@ flowchart TD
   IDB -->|签名 PUT| GCS[GCS MIDI + performance-events.json]
   IDB -->|POST finalize 完整 Activity| Finalize[同一 DB 事务]
   Finalize -->|补齐并封存| Activity
-  Finalize -->|UPLOADED + finalization| Upload
+  Finalize -->|ACCEPTED + finalization| Upload
   Finalize --> Projection[(challenge_recordings + user_play_logs)]
-  Finalize --> Outbox[(performance.uploaded outbox)]
+  Finalize --> Outbox[(performance.submitted outbox)]
   Outbox --> Relay[Relay / PubSub]
   Relay --> Worker[Worker]
   GCS --> Worker
@@ -83,3 +85,5 @@ Worker 不把客户端成功事实改成自己的评分；投影重建保持这�
 Result 引用化、删除旧表、撤销全部 Lake 资源不在本次直接执行：这些仍有读者/对象身份/历史用途依赖。已将 Lake 调度默认独立暂停，并让主路径不依赖 Delta/Spark。需要时显式启用；Result v3 字段没有删除。
 
 验收：正常完成/退出、多次暂停、先到/后到/乱序 Activity、无 Activity 的 finalize 补写、真实篡改、interrupted 冲突、同包重试、GCS digest 错误、投影重建、环境过滤、Direct/Lake fixture 一致性。真实 PostgreSQL 并发测试已接入 CI 专用测试数据库，不能指向生产 DATABASE_URL。
+
+017 补充：user_play_logs 只在 validated_at 提交时建立；榜单只纳入验证通过录音；本地恢复包保留到 validated_at。具体状态、错误和部署约束以异步接收文档为准。

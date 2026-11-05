@@ -1,3 +1,4 @@
+import pianokt_backend.api as api
 from fastapi.testclient import TestClient
 from pianokt_backend.api import app,user
 from fastapi import HTTPException
@@ -25,11 +26,11 @@ def test_existing_whitelist_is_enforced(monkeypatch):
     monkeypatch.delenv('PIANOKT_LOCAL_DEV_BYPASS',raising=False)
     monkeypatch.delenv('PIANOKT_ENV',raising=False)
     uid='00000000-0000-0000-0000-000000000001'
-    monkeypatch.setattr(httpx,'get',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:{'id':uid}))
-    monkeypatch.setattr(httpx,'post',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:False))
+    monkeypatch.setattr(api.auth_client(),'get',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:{'id':uid}))
+    monkeypatch.setattr(api.auth_client(),'post',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:False))
     with pytest.raises(HTTPException) as exc: user('Bearer fixture')
     assert exc.value.status_code==403
-    monkeypatch.setattr(httpx,'post',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:True))
+    monkeypatch.setattr(api.auth_client(),'post',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:True))
     assert user('Bearer fixture')==uid
 
 def test_local_development_can_bypass_only_the_access_list(monkeypatch):
@@ -41,8 +42,8 @@ def test_local_development_can_bypass_only_the_access_list(monkeypatch):
     monkeypatch.setenv('PIANOKT_LOCAL_DEV_BYPASS','1')
     monkeypatch.delenv('K_SERVICE',raising=False)
     uid='00000000-0000-0000-0000-000000000001'
-    monkeypatch.setattr(httpx,'get',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:{'id':uid}))
-    monkeypatch.setattr(httpx,'post',lambda *a,**kw:pytest.fail('allow-list RPC must not run locally'))
+    monkeypatch.setattr(api.auth_client(),'get',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:{'id':uid}))
+    monkeypatch.setattr(api.auth_client(),'post',lambda *a,**kw:pytest.fail('allow-list RPC must not run locally'))
     assert user('Bearer fixture')==uid
 
 def test_cloud_run_cannot_enable_the_local_access_list_bypass(monkeypatch):
@@ -54,8 +55,8 @@ def test_cloud_run_cannot_enable_the_local_access_list_bypass(monkeypatch):
     monkeypatch.setenv('PIANOKT_LOCAL_DEV_BYPASS','1')
     monkeypatch.setenv('K_SERVICE','pianokt-api')
     uid='00000000-0000-0000-0000-000000000001'
-    monkeypatch.setattr(httpx,'get',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:{'id':uid}))
-    monkeypatch.setattr(httpx,'post',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:False))
+    monkeypatch.setattr(api.auth_client(),'get',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:{'id':uid}))
+    monkeypatch.setattr(api.auth_client(),'post',lambda *a,**kw:SimpleNamespace(status_code=200,json=lambda:False))
     with pytest.raises(HTTPException) as exc: user('Bearer fixture')
     assert exc.value.status_code==403
 

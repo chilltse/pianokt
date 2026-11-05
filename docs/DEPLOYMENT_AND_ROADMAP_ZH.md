@@ -1,10 +1,12 @@
 # PianoKT 运行与部署手册
 
-更新日期：2026-11-04。对应当前代码、migration 016 和 infra/gcp/main.tf。命令是供目标环境执行的操作说明；本次文档整理没有部署云资源。系统分工见 [架构总览](ARCHITECTURE_ZH.md)。
+2026-11-05 最新架构：异步 finalize v3 + migration 017，详见 [异步接收与部署](ASYNC_FINALIZATION_ZH.md)。此前性能优化见 [计时说明](UPLOAD_PERFORMANCE_ZH.md)。
+
+更新日期：2026-11-04。当前异步提交先按 [017 协调升级顺序](ASYNC_FINALIZATION_ZH.md) 执行；下文保留 migration 016 和 infra/gcp/main.tf。命令是供目标环境执行的操作说明；本次文档整理没有部署云资源。系统分工见 [架构总览](ARCHITECTURE_ZH.md)。
 
 当前默认 `--source direct --environment production`。完整结构见 [v2 数据字典](DATA_CONTRACT_V2_ZH.md)。以下升级步骤优先于文中保留的 014 历史升级说明。
 
-## v2 / migration 016 升级顺序与注意事项
+## 历史 v2 / migration 016 升级顺序与注意事项
 
 1. 安排一次协调升级窗口，停止旧前端创建新演奏，暂停旧 API/Worker 的写入；本轮不维护 v1 上传兼容层。
 2. 在已有 001–015 的数据库执行 **新增** `supabase/migrations/016_challenge_event_authority.sql`。不要重跑整套历史 migration，不修改已应用文件。它新增来源/封存/投影字段，关闭旧 RPC/trigger，不删除历史数据。

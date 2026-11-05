@@ -79,8 +79,27 @@ export async function listChallengeRecordings(): Promise<
     }
   }
 
+  const rows = (data ?? []) as ChallengeRecordingRow[]
+  if (!rows.length) return { data: rows }
+  const { data: attempts, error: statusError } = await supabase
+    .from('piano_attempts')
+    .select('id,status,validated_at,validation_error')
+    .in(
+      'id',
+      rows.map((row) => row.id),
+    )
+  if (statusError) return { error: statusError.message }
+  const states = new Map((attempts ?? []).map((attempt) => [attempt.id, attempt]))
   return {
-    data: (data ?? []) as ChallengeRecordingRow[],
+    data: rows.map((row) => {
+      const state = states.get(row.id)
+      return {
+        ...row,
+        upload_status: state?.status,
+        validated_at: state?.validated_at,
+        validation_error: state?.validation_error,
+      }
+    }),
   }
 }
 

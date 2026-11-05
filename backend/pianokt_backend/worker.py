@@ -7,6 +7,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from psycopg.types.json import Jsonb
 from .online import connect
+from .timing import stage
+from .upload_validation import validate_files, InvalidUpload
+from .projections import project_challenge
+from .upload_contracts import Finalize
 from .storage import Objects
 from .contracts import digest,AlignmentConfig
 from .alignment.service import align,alignment_run_id,matcher_version
@@ -16,37 +20,6 @@ def _finite_nonnegative(value,default=None):
     if isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and value>=0:
         return float(value)
     return default
-
-
-def _performance_event_sidecar(row,store):
-    """Load the immutable browser-side audit that was verified at finalize.
-
-    The worker checks the digest again because it is the boundary that turns the
-    uploaded bundle into an alignment result.  Historical attempts have no
-    sidecar and deliberately follow the bounded legacy path in ``align``.
-    """
-    key=row.get('performance_events_key')
-    expected_hash=row.get('performance_events_hash')
-    if not key and not expected_hash:
-        return None,[],None
-    if not key or not expected_hash:
-        raise ValueError('Incomplete performance event sidecar identity')
-    data=store.read(key)
-    if digest(data)!=expected_hash:
-        raise ValueError('Performance event telemetry integrity mismatch')
-    try:
-        payload=json.loads(data)
-    except json.JSONDecodeError as exc:
-        raise ValueError('Invalid performance event telemetry JSON') from exc
-    if not isinstance(payload,dict) or payload.get('schemaVersion')!=1:
-        raise ValueError('Invalid performance event telemetry schema')
-    events=payload.get('events')
-    segments=payload.get('transportSegments')
-    if not isinstance(events,list) or not isinstance(segments,list):
-        raise ValueError('Invalid performance event telemetry payload')
-    if row.get('performance_events_count') is not None and len(events)!=row['performance_events_count']:
-        raise ValueError('Performance event telemetry count mismatch')
-    return events,segments,payload
 
 
 def _alignment_window(settings):
@@ -153,27 +126,34 @@ def process(attempt_id):
     attempt_id=str(uuid.UUID(str(attempt_id)))
     lease_token=str(uuid.uuid4())
     with connect() as c:
-        row=c.execute("""update public.piano_attempts set status='PROCESSING',lease_token=%s,lease_until=now()+interval '10 minutes',updated_at=now()
-            where id=%s and (status in ('UPLOADED','FAILED') or (status='PROCESSING' and lease_until<now())) returning *""",(lease_token,attempt_id,)).fetchone()
+        row=c.execute("""update public.piano_attempts set status='VALIDATING',lease_token=%s,lease_until=now()+interval '10 minutes',processing_attempts=processing_attempts+1,updated_at=now()
+            where id=%s and processing_attempts<8 and (status in ('ACCEPTED','UPLOADED') or (status='RETRY' and next_retry_at<=now()) or (status in ('VALIDATING','PROCESSING') and lease_until<now())) returning *""",(lease_token,attempt_id,)).fetchone()
         if not row:
             current=c.execute('select status from public.piano_attempts where id=%s',(attempt_id,)).fetchone()
-            if current and current['status']=='READY': return
+            if current and current['status'] in ('READY','INVALID','FAILED'): return
             raise RuntimeError('Attempt busy or not finalized')
     store=Objects(os.environ['RAW_ROOT'])
     try:
         settings=row['metadata'].get('settings',{}) if isinstance(row.get('metadata'),dict) else {}
         observed_end_sec,reference_origin_sec=_alignment_window(settings)
-        performance_events,transport_segments,telemetry=_performance_event_sidecar(row,store)
         config=AlignmentConfig()
         # The result key itself is the immutable crash-recovery marker. It is
         # impossible for a legacy Parangonar manifest to pin this matcher to a
         # stale result, and no create-only manifest needs to be overwritten.
         with TemporaryDirectory(prefix='pianokt-worker-') as tmp:
-            files={}
-            for kind in ('performance','reference'):
-                data=store.read(row[kind+'_key'])
-                if digest(data)!=row[kind+'_hash']: raise ValueError('MIDI integrity mismatch')
-                files[kind]=Path(tmp)/(kind+'.mid'); files[kind].write_bytes(data)
+            with stage('worker.validate.' + attempt_id):
+                files,telemetry,generations=validate_files(store,row,tmp)
+            performance_events=(telemetry or {}).get('events')
+            transport_segments=(telemetry or {}).get('transportSegments',[])
+            with connect() as c:
+                validated=c.execute("""update public.piano_attempts set status='PROCESSING',
+                    validated_at=coalesce(validated_at,clock_timestamp()),file_generations=%s,
+                    validation_error=null,error_code=null,next_retry_at=null
+                    where id=%s and lease_token=%s returning *""",
+                    (Jsonb(generations),attempt_id,lease_token)).fetchone()
+                if not validated: raise RuntimeError('Worker lease superseded')
+                if validated.get('finalization'):
+                    project_challenge(c,validated,Finalize.model_validate(validated['finalization']))
             run=alignment_run_id(
                 files['reference'],files['performance'],attempt_id,config,
                 performance_events,observed_end_sec,transport_segments,reference_origin_sec,
@@ -245,12 +225,40 @@ def process(attempt_id):
         with connect() as c:
             commit_alignment(c,attempt_id,lease_token,result_key,result)
     except Exception as exc:
-        with connect() as c: c.execute("update public.piano_attempts set status='FAILED',error_code=%s,lease_until=null,updated_at=now() where id=%s and lease_token=%s and status<>'READY'",(type(exc).__name__,attempt_id,lease_token))
+        invalid=isinstance(exc,InvalidUpload)
+        exhausted=row['processing_attempts']>=8
+        state='INVALID' if invalid else ('FAILED' if exhausted else 'RETRY')
+        with connect() as c:
+            c.execute("""update public.piano_attempts set status=%s,error_code=%s,validation_error=%s,
+                next_retry_at=now()+interval '1 minute' * %s,lease_until=null,updated_at=now()
+                where id=%s and lease_token=%s and status<>'READY'""",
+                (state,type(exc).__name__,str(exc)[:500] if invalid else None,
+                 min(2**row['processing_attempts'],30),attempt_id,lease_token))
+        if invalid or exhausted:
+            return  # Acknowledge permanent failure; never poison-loop the queue.
         raise
+
+
+def recover_pending(c):
+    c.execute("""update public.piano_attempts set status='FAILED',error_code='RetryExhausted',
+        lease_until=null,updated_at=now() where processing_attempts>=8 and
+        ((status in ('VALIDATING','PROCESSING') and lease_until<now()) or
+         (status='RETRY' and next_retry_at<=now()))""")
+    # Re-arm published outbox rows after transient failure, expired leases, or
+    # lost/dead-lettered notifications. Worker claiming remains the authority.
+    c.execute("""update public.piano_outbox o set published_at=null
+      from public.piano_attempts a where o.aggregate_id=a.id::text
+      and o.event_type in ('performance.submitted','performance.uploaded')
+      and o.published_at < now()-interval '2 minutes' and (
+        (a.status in ('ACCEPTED','UPLOADED') and a.updated_at<now()-interval '2 minutes') or
+        (a.status='RETRY' and a.next_retry_at<=now()) or
+        (a.status in ('VALIDATING','PROCESSING') and a.lease_until<now()))""")
+
 
 def relay(limit=100):
     from google.cloud import pubsub_v1
     publisher=pubsub_v1.PublisherClient(); count=0
+    with connect() as c: recover_pending(c)
     for _ in range(limit):
         with connect() as c:
             row=c.execute('select * from public.piano_outbox where published_at is null order by created_at for update skip locked limit 1').fetchone()

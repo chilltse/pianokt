@@ -12,3 +12,6 @@ source_environment = "production"
 lake_pipeline_paused = true
 # Keep production origins free of localhost; use a separate development deployment.
 local_development_origins = []
+
+# Enable schedules when deploying async finalization. Lake can stay paused.
+relay_schedule = "* * * * *"

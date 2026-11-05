@@ -91,3 +91,29 @@ test('local seal completes before remote delivery and concurrent recovery sends 
   assert.deepEqual(await second, [])
   assert.equal(rows.size, 0)
 })
+
+test('accepted receipt retains recovery bytes until server confirms validation', async () => {
+  const rows = new Map<string, PendingUpload<string>>()
+  let validated = false
+  const queue = new UploadQueue<string>(
+    {
+      async seal(record) {
+        rows.set(`${record.ownerId}:${record.id}`, record)
+      },
+      async list() {
+        return [...rows]
+      },
+      async remove(key) {
+        rows.delete(key)
+      },
+    },
+    async () => validated,
+  )
+  await queue.enqueue({ id: 'a', ownerId: 'alice', payload: 'immutable bundle' })
+  assert.equal(rows.size, 1)
+  await queue.replay('alice')
+  assert.equal(rows.size, 1)
+  validated = true
+  await queue.replay('alice')
+  assert.equal(rows.size, 0)
+})

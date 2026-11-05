@@ -25,7 +25,7 @@ class Upload(BaseModel):
 
 class Finalize(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_version:Literal[2]
+    schema_version:Literal[2,3]
     activity:Activity
 
 class LocalAlignment(BaseModel):

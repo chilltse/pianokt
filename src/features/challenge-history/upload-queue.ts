@@ -32,7 +32,7 @@ export class UploadQueue<T> {
   private inFlight = new Map<string, Promise<void>>()
   constructor(
     private store: UploadStore<T>,
-    private send: (record: PendingUpload<T>) => Promise<void>,
+    private send: (record: PendingUpload<T>) => Promise<void | boolean>,
   ) {}
 
   async seal(record: PendingUpload<T>, onSealed?: () => void) {
@@ -45,8 +45,8 @@ export class UploadQueue<T> {
     const existing = this.inFlight.get(key)
     if (existing) return existing
     const pending = (async () => {
-      await this.send(record)
-      await this.store.remove(key)
+      const verified = await this.send(record)
+      if (verified !== false) await this.store.remove(key)
     })().finally(() => this.inFlight.delete(key))
     this.inFlight.set(key, pending)
     return pending
