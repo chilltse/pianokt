@@ -5,6 +5,7 @@ import mido
 import pytest
 from test_activity import db, new_upload, full_packet, A, U
 from pianokt_backend import worker
+from pianokt_backend.outbox_dispatch import recover_pending
 from pianokt_backend.contracts import digest
 from pianokt_backend.storage import Objects
 from pianokt_backend.upload_service import commit_finalization
@@ -70,13 +71,13 @@ def test_missing_file_retries_and_relay_recovers(db,monkeypatch,tmp_path):
     row=db.execute('select * from piano_attempts').fetchone()
     assert row['status']=='RETRY' and row['validated_at'] is None
     db.execute("update piano_outbox set published_at=now()-interval '5 minutes'")
-    worker.recover_pending(db)
+    recover_pending(db)
     assert db.execute('select published_at from piano_outbox').fetchone()['published_at']
     db.execute("update piano_attempts set next_retry_at=now()-interval '1 minute'")
-    worker.recover_pending(db)
+    recover_pending(db)
     assert db.execute('select published_at from piano_outbox').fetchone()['published_at'] is None
     db.execute("update piano_attempts set status='VALIDATING',processing_attempts=8,lease_until=now()-interval '1 minute'")
-    worker.recover_pending(db)
+    recover_pending(db)
     assert db.execute('select status from piano_attempts').fetchone()['status']=='FAILED'
 
 

@@ -23,6 +23,20 @@ variable "schedules_paused" {
   type    = bool
   default = true
 }
+variable "direct_pubsub_enabled" {
+  type        = bool
+  default     = false
+  description = "Enable only after API topic IAM and v3 Worker are verified; Outbox remains authoritative."
+}
+variable "direct_pubsub_timeout_s" {
+  type        = number
+  default     = 2
+  description = "Pub/Sub ACK wait budget, excluding DB acquisition and publisher cold initialization."
+  validation {
+    condition     = var.direct_pubsub_timeout_s > 0 && var.direct_pubsub_timeout_s <= 30
+    error_message = "Use a positive ACK timeout of at most 30 seconds."
+  }
+}
 variable "source_environment" {
   type    = string
   default = "production"
@@ -32,8 +46,8 @@ variable "source_environment" {
   }
 }
 variable "lake_pipeline_paused" {
-  type    = bool
-  default = true
+  type        = bool
+  default     = true
   description = "Direct Export is the default; explicitly opt in to scheduled lake materialization."
 }
 locals {
@@ -126,6 +140,11 @@ resource "google_pubsub_topic_iam_member" "relay" {
   role   = "roles/pubsub.publisher"
   member = "serviceAccount:${google_service_account.runtime["relay"].email}"
 }
+resource "google_pubsub_topic_iam_member" "api_publisher" {
+  topic  = google_pubsub_topic.events.name
+  role   = "roles/pubsub.publisher"
+  member = "serviceAccount:${google_service_account.runtime["api"].email}"
+}
 resource "google_project_service_identity" "pubsub" {
   provider   = google-beta
   service    = "pubsub.googleapis.com"
@@ -163,7 +182,10 @@ resource "google_cloud_run_v2_service" "app" {
     service_account                  = google_service_account.runtime[each.value].email
     timeout                          = "540s"
     max_instance_request_concurrency = each.value == "worker" ? 1 : 20
-    scaling { max_instance_count = 3 }
+    scaling {
+      min_instance_count = 0
+      max_instance_count = 3
+    }
     containers {
       image   = var.image
       command = ["uvicorn"]
@@ -179,7 +201,11 @@ resource "google_cloud_run_v2_service" "app" {
         }
       }
       dynamic "env" {
-        for_each = { PIANOKT_ENV = var.source_environment, RAW_ROOT = "gs://${google_storage_bucket.data["raw"].name}", SUPABASE_URL = var.supabase_url, SUPABASE_ANON_KEY = var.supabase_anon_key, FRONTEND_ORIGINS = join(",", local.browser_origins), SIGNING_SERVICE_ACCOUNT = google_service_account.runtime["api"].email }
+        for_each = merge({ PIANOKT_ENV = var.source_environment, RAW_ROOT = "gs://${google_storage_bucket.data["raw"].name}", SUPABASE_URL = var.supabase_url, SUPABASE_ANON_KEY = var.supabase_anon_key, FRONTEND_ORIGINS = join(",", local.browser_origins), SIGNING_SERVICE_ACCOUNT = google_service_account.runtime["api"].email }, each.value == "api" ? {
+          EVENT_TOPIC             = google_pubsub_topic.events.id
+          DIRECT_PUBSUB_ENABLED   = tostring(var.direct_pubsub_enabled)
+          DIRECT_PUBSUB_TIMEOUT_S = tostring(var.direct_pubsub_timeout_s)
+        } : {})
         content {
           name  = env.key
           value = env.value
@@ -187,7 +213,7 @@ resource "google_cloud_run_v2_service" "app" {
       }
     }
   }
-  depends_on = [google_project_service.enabled, google_secret_manager_secret_iam_member.database]
+  depends_on = [google_project_service.enabled, google_secret_manager_secret_iam_member.database, google_pubsub_topic_iam_member.api_publisher]
 }
 resource "google_cloud_run_v2_service_iam_member" "api" {
   name     = google_cloud_run_v2_service.app["api"].name
@@ -251,7 +277,9 @@ resource "google_cloud_run_v2_job" "job" {
         image   = each.value == "pipeline" ? var.spark_image : var.image
         command = ["pianokt-data"]
         args    = [each.value]
-        resources { limits = { cpu = "2", memory = "4Gi" } }
+        resources {
+          limits = each.value == "relay" ? { cpu = "1", memory = "1Gi" } : { cpu = "2", memory = "4Gi" }
+        }
         env {
           name = "DATABASE_URL"
           value_source {
@@ -297,8 +325,8 @@ output "api_url" { value = google_cloud_run_v2_service.app["api"].uri }
 
 variable "relay_schedule" {
   type        = string
-  default     = "* * * * *"
-  description = "Outbox dispatch and recovery every minute; accepted recordings may queue until the next run."
+  default     = "*/15 * * * *"
+  description = "Low-frequency compensation after direct dispatch is verified. Override to every minute during rollout or rollback."
 }
 variable "pipeline_schedule" {
   type        = string

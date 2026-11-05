@@ -114,7 +114,7 @@ bash scripts/dev-backend.sh 2>&1 | tee /tmp/pianokt-backend.log
 
 Complete a new practice cycle with pause/resume events. Collect its generated
 X-Request-ID and select only matching log records. For a normal first finalize
-with nine events and no validated projection, expect:
+with nine events, no validated projection and DIRECT_PUBSUB_ENABLED=false, expect:
 
 - finalize.activity_events, activity.events and activity.stored_events: 9.
 - event.batch_insert: calls=1; event.batch_conflict_select: calls=1.
@@ -127,7 +127,7 @@ with nine events and no validated projection, expect:
 Compare equivalent first submissions and event counts; duplicate finalize is a
 different path. Replay an identical finalize body: expect 202, unchanged event
 and Outbox counts, and the current Attempt state (possibly READY). The retry
-normally has three measured SQL statements plus COMMIT and no event writes.
+now has four measured SQL statements plus COMMIT (including the existing Outbox lookup) and no event writes. With direct dispatch enabled, a separate outbox.transaction may add SQL/ACK time after the main COMMIT; do not combine it with the original business transaction when comparing these counts.
 A modified finalize body must return 409. A late identical /activity packet is
 allowed; a new event after sealing must return 409. Sealed /activity intentionally
 uses the sequential fallback, so its SQL count differs from first finalize.

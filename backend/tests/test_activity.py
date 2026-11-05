@@ -16,6 +16,7 @@ A='20000000-0000-0000-0000-000000000001'
 class Connection:
     def __init__(self,process): self.process=process
     def execute(self,sql,params=()):
+        params = () if params is None else params
         def encode(v):
             if hasattr(v,'obj'): return v.obj
             if isinstance(v,datetime): return v.isoformat()

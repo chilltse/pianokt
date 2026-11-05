@@ -1,5 +1,6 @@
 import json
 import math
+import logging
 import os
 import uuid
 from datetime import datetime,timezone
@@ -129,8 +130,19 @@ def process(attempt_id):
         row=c.execute("""update public.piano_attempts set status='VALIDATING',lease_token=%s,lease_until=now()+interval '10 minutes',processing_attempts=processing_attempts+1,updated_at=now()
             where id=%s and processing_attempts<8 and (status in ('ACCEPTED','UPLOADED') or (status='RETRY' and next_retry_at<=now()) or (status in ('VALIDATING','PROCESSING') and lease_until<now())) returning *""",(lease_token,attempt_id,)).fetchone()
         if not row:
-            current=c.execute('select status from public.piano_attempts where id=%s',(attempt_id,)).fetchone()
-            if current and current['status'] in ('READY','INVALID','FAILED'): return
+            current=c.execute("""select status,
+                lease_until>clock_timestamp() as lease_active,
+                next_retry_at>clock_timestamp() as retry_deferred
+                from public.piano_attempts where id=%s""",(attempt_id,)).fetchone()
+            reason = None
+            if current:
+                if current['status'] in ('READY','INVALID','FAILED'): reason = 'terminal'
+                elif current['status'] in ('VALIDATING','PROCESSING') and current['lease_active']: reason = 'active_lease'
+                elif current['status'] == 'RETRY' and current['retry_deferred']: reason = 'retry_deferred'
+            if reason:
+                logging.getLogger('uvicorn.error').info('stage=worker.duplicate outcome=ack reason=%s', reason)
+                return
+            logging.getLogger('uvicorn.error').warning('stage=worker.claim outcome=unavailable')
             raise RuntimeError('Attempt busy or not finalized')
     store=Objects(os.environ['RAW_ROOT'])
     try:
@@ -237,33 +249,3 @@ def process(attempt_id):
         if invalid or exhausted:
             return  # Acknowledge permanent failure; never poison-loop the queue.
         raise
-
-
-def recover_pending(c):
-    c.execute("""update public.piano_attempts set status='FAILED',error_code='RetryExhausted',
-        lease_until=null,updated_at=now() where processing_attempts>=8 and
-        ((status in ('VALIDATING','PROCESSING') and lease_until<now()) or
-         (status='RETRY' and next_retry_at<=now()))""")
-    # Re-arm published outbox rows after transient failure, expired leases, or
-    # lost/dead-lettered notifications. Worker claiming remains the authority.
-    c.execute("""update public.piano_outbox o set published_at=null
-      from public.piano_attempts a where o.aggregate_id=a.id::text
-      and o.event_type in ('performance.submitted','performance.uploaded')
-      and o.published_at < now()-interval '2 minutes' and (
-        (a.status in ('ACCEPTED','UPLOADED') and a.updated_at<now()-interval '2 minutes') or
-        (a.status='RETRY' and a.next_retry_at<=now()) or
-        (a.status in ('VALIDATING','PROCESSING') and a.lease_until<now()))""")
-
-
-def relay(limit=100):
-    from google.cloud import pubsub_v1
-    publisher=pubsub_v1.PublisherClient(); count=0
-    with connect() as c: recover_pending(c)
-    for _ in range(limit):
-        with connect() as c:
-            row=c.execute('select * from public.piano_outbox where published_at is null order by created_at for update skip locked limit 1').fetchone()
-            if not row: break
-            data=dict(row['payload'],event_id=str(row['event_id']),event_type=row['event_type'])
-            publisher.publish(os.environ['EVENT_TOPIC'],json.dumps(data).encode(),event_type=row['event_type']).result(timeout=30)
-            c.execute('update public.piano_outbox set published_at=now() where event_id=%s',(row['event_id'],)); count+=1
-    return count

@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -14,6 +15,7 @@ def main():
     a.add_argument('--raw',default='data/raw'); a.add_argument('--lake',default='data/lakehouse')
     a=sub.add_parser('pipeline'); a.add_argument('--replay',action='store_true')
     a=sub.add_parser('relay'); a.add_argument('--limit',type=int,default=1000)
+    a.add_argument('--max-seconds',type=float,default=600)
     a=sub.add_parser('worker'); a.add_argument('attempt_id')
     sub.add_parser('spark-events')
     a=sub.add_parser('export-training'); a.add_argument('--cutoff',required=True); a.add_argument('--output-key',required=True); a.add_argument('--run-selection',type=Path)
@@ -58,9 +60,18 @@ def main():
             source=Tables(os.getenv('LAKE_ROOT','data/lakehouse'))
         print(export_dataset(Objects(os.getenv('RAW_ROOT','data/raw')),source,args.cutoff,args.output_key,context,run_selection,args.environment)); return
     if args.command=='relay':
-        from .worker import relay
-        print(relay(args.limit)); return
+        from .outbox_dispatch import relay, close_publisher
+        logging.basicConfig(level=logging.INFO, format='%(message)s')
+        try:
+            print(relay(args.limit, max_duration_s=args.max_seconds))
+        except Exception as exc:
+            logging.getLogger(__name__).error('stage=outbox.relay outcome=error error_type=%s', type(exc).__name__)
+            raise SystemExit(1) from None
+        finally:
+            close_publisher()
+        return
     if args.command=='worker':
+        logging.basicConfig(level=logging.INFO, format='%(message)s')
         from .worker import process
         process(args.attempt_id); return
     if args.command=='spark-events':

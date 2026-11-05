@@ -13,5 +13,8 @@ lake_pipeline_paused = true
 # Keep production origins free of localhost; use a separate development deployment.
 local_development_origins = []
 
-# Enable schedules when deploying async finalization. Lake can stay paused.
-relay_schedule = "* * * * *"
+# First rollout: keep relay_schedule="* * * * *" until direct dispatch is verified.
+# Final target: enable schedules, keep Lake paused, then compensate every 15 min.
+relay_schedule = "*/15 * * * *"
+direct_pubsub_enabled = false
+direct_pubsub_timeout_s = 2

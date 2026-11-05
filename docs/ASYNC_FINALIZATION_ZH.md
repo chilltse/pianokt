@@ -1,13 +1,13 @@
 # 异步 finalize：持久接收、验证与恢复
 
-更新：2026-11-05。对应 migration 017；本次仅修改代码和迁移，未应用远端数据库或部署云服务。
+更新：2026-11-05。依赖 migration 017；事件驱动派发已在代码实现，本轮没有新增迁移或部署云服务。实施记录、线上配置差异及发布限制见 [事件驱动派发实施记录](RELAY_EVENT_DRIVEN_IMPLEMENTATION_ZH.md)。
 
 ## 协议与数据流
 
 1. 浏览器将完整演奏封存到 IndexedDB v2。创建上传仍为 `POST /attempts`、`schema_version=2`，登记对象 Key/Hash/侧车数量/设置，形成数据库中的文件清单。文件上限为每个 MIDI 8 MB、侧车 4 MB。
 2. 最多三份 GCS 文件并行 create-only PUT。全部成功或 412 才提交 finalize；412 不代表内容已验证。
-3. `POST /attempts/{id}/finalize` 使用 **`{schema_version:3, activity:完整Activity}`**。API 仅做认证、所有权/环境/事件身份和时序校验，在一个事务内补齐事件、封存、写 ACCEPTED/accepted_at/finalization、录音列表投影、performance.submitted outbox。提交后返回 **202**，正文 `{id,status,validated_at}`。这里没有 GCS 读取或对齐计算；API 认证和数据库耗时仍存在。
-4. Relay 发布 outbox；私有 Pub/Sub Worker 领取带 lease_token 的任务，进入 VALIDATING。检查文件大小、实际 SHA-256、MIDI 解析、完整侧车契约，GCS 读取使用 generation 前置条件。验证通过后记录 validated_at/file_generations、进入 PROCESSING，并生成 user_play_logs。
+3. `POST /attempts/{id}/finalize` 使用 **`{schema_version:3, activity:完整Activity}`**。API 仅做认证、所有权/环境/事件身份和时序校验，在一个事务内补齐事件、封存、写 ACCEPTED/accepted_at/finalization、录音列表投影、performance.submitted outbox。提交成功后，可在独立上下文中即时发布持久 Outbox（`DIRECT_PUBSUB_ENABLED` 默认 false，ACK 预算默认 2 秒）；发布失败仍返回 **202**，正文 `{id,status,validated_at}`。这里没有 GCS 读取或对齐计算；API 认证和数据库耗时仍存在。
+4. API 快速路径或低频 Relay 发布 outbox；私有 Pub/Sub Worker 领取带 lease_token 的任务，进入 VALIDATING。检查文件大小、实际 SHA-256、MIDI 解析、完整侧车契约，GCS 读取使用 generation 前置条件。验证通过后记录 validated_at/file_generations、进入 PROCESSING，并生成 user_play_logs。
 5. Worker 复用本次已验证的 MIDI 文件和侧车数据进行对齐，不重复下载；提交 Result、READY 和 alignment.completed。重试时使用已记录的 GCS generation，避免引用不同代对象。
 6. 浏览器恢复首先查询已有 attempt：ACCEPTED/VALIDATING/PROCESSING/RETRY 不重复签名或上传；只轮询状态。例外：Worker 明确报告未验证文件缺失（NotFound/FileNotFoundError）时，恢复包重新获取签名并尝试补传，仍禁止覆盖已有对象。**有 validated_at 才清理本地 Bundle**，无需等待评分 READY。INVALID/未验证 FAILED 保留恢复包并在录音列表显示错误。
 
@@ -25,7 +25,7 @@
 - FAILED：8 次处理尝试耗尽，包括连续进程崩溃导致的过期租约；需要人工排查。不是自动无限循环。
 - UPLOADED：历史同步验证后的状态，新请求不产生；新 Worker 仍支持处理。
 
-Worker 租约 10 分钟，私有 HTTP Worker 子进程超时 480 秒。所有结果提交和失败更新都由 lease_token 防止旧 Worker 覆盖新任务。重复 READY/INVALID/FAILED 消息直接确认；忙碌或未到重试时间的通知暂时拒绝，由队列/恢复扫描后续驱动。
+Worker 租约 10 分钟，私有 HTTP Worker 子进程超时 480 秒。所有结果提交和失败更新都由 lease_token 防止旧 Worker 覆盖新任务。重复 READY/INVALID/FAILED、有效租约中的 VALIDATING/PROCESSING、未到 next_retry_at 的 RETRY 通知直接确认；不会再次领取或增加 processing_attempts。过期租约与到期重试仍允许原子领取，低频恢复扫描不能关闭。CREATED/不存在不会当作已完成。
 
 录音列表在 ACCEPTED 时就能显示，并每 15 秒刷新状态；未验证时禁用下载按钮。浏览器上传恢复每 30 秒/恢复在线/新任务时检查服务端状态，不是持续高频轮询。
 
@@ -47,7 +47,11 @@ Worker 租约 10 分钟，私有 HTTP Worker 子进程超时 480 秒。所有结
 
 复用数据库 piano_outbox 和 Pub/Sub；新增事件 performance.submitted，payload 仍为 attempt_id、learner_key、source_environment。订阅和 Worker 同时接受历史 performance.uploaded。
 
-Terraform relay_schedule 默认改为每分钟，`schedules_paused=false` 才会运行，Lake 可继续 `lake_pipeline_paused=true`。这是分钟级调度，不保证秒级开始评分；Cloud Run Job 启动和排队还会增加延迟。没有把关键任务放在 FastAPI BackgroundTasks 中。
+提交后的快速路径使用 `outbox_dispatch.py`，与 Relay 共用 `FOR UPDATE SKIP LOCKED`、消息编码、有限 ACK 等待和 published_at 确认。没有把关键任务放在 FastAPI BackgroundTasks 中。ACK 成功但确认提交失败时允许同一 event_id 重发。
+
+Terraform `relay_schedule` 的最终默认值为每 15 分钟，`schedules_paused=false` 才会运行，Lake 保持 `lake_pipeline_paused=true`。首次发布先显式使用每分钟补偿，确认直发和兼容订阅后再降频。202 会增加有界 ACK 等待和额外 DB 开销，2 秒不包括整个请求；Job 启动、调度和网络仍可能增加延迟。Worker 崩溃恢复可能先等剩余 10 分钟 lease，再等下一次扫描。
+
+**本轮只读发现：线上订阅只接收 uploaded，Scheduler 是 `0 10,23 * * *`。不得直接开启 submitted 直发或 apply 可能重建订阅的计划。** 先按实施记录做旧订阅积压保护与并行迁移；生产 017 仍需单独核实。
 
 每次 relay 先扫描：已发布但仍滞留 ACCEPTED/UPLOADED、到期 RETRY、过期 VALIDATING/PROCESSING 租约。满足条件的旧 outbox 重新设为待发布，允许重复通知。达到重试上限的过期任务转 FAILED。补偿不依赖浏览器，Pub/Sub 死信/短暂通知丢失不等于任务永久遗失；前提是 relay 调度确实启用且数据库、IAM、消息服务可用。
 
@@ -70,4 +74,6 @@ Terraform relay_schedule 默认改为每分钟，`schedules_paused=false` 才会
 
 未做真实 GCP 端到端部署或耗时对比；同步等待减少来自移除文件读取，并不是承诺所有环境都能在固定毫秒数内返回。Bundle 打包、提前签名、GCS 事件替代 finalize 均未实施。
 
-本次检查：后端 79 passed / 4 skipped（3 项真实 PostgreSQL 并发、1 项 Spark）；前端类型检查、生产构建、协议/恢复测试与 Terraform validate 通过。真实生产队列/IAM/网络耗时须部署后验收。
+017 初始版本历史检查：后端 79 passed / 4 skipped（3 项真实 PostgreSQL 并发、1 项 Spark）；前端类型检查、生产构建、协议/恢复测试与 Terraform validate 通过。真实生产队列/IAM/网络耗时须部署后验收。
+
+最新事件驱动版本的测试结果和未完成的云端验收见 [实施记录](RELAY_EVENT_DRIVEN_IMPLEMENTATION_ZH.md)。

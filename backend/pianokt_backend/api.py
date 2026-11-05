@@ -20,7 +20,7 @@ from .online import connect,owned_attempt,close_pool,enable_pool
 from .storage import Objects
 from .contracts import check_midi,digest
 from .inference import DemoRecommender
-from .alignment.service import align
+from .outbox_dispatch import dispatch_after_commit, close_publisher
 from .upload_service import commit_finalization
 from .activity import Activity, save_activity
 from .provenance import recording_environment
@@ -47,6 +47,7 @@ async def lifespan(app):
         if signing_credentials.cache_info().currsize:
             signing_credentials()[1].session.close()
         signing_credentials.cache_clear()
+        close_publisher()
         close_pool()
 
 app=FastAPI(title='PianoKT API',version='0.1.0',lifespan=lifespan)
@@ -135,6 +136,7 @@ def health(): return {'status':'ok'}
 def local_align(body:LocalAlignment):
     """Run and persist a local-only dataset sample; no GCS or database access."""
     if not local_alignment_lab_enabled(): raise HTTPException(404,'Not found')
+    from .alignment.service import align
     try:
         performance=base64.b64decode(body.performance_midi_base64,validate=True)
         reference=base64.b64decode(body.reference_midi_base64,validate=True)
@@ -183,15 +185,18 @@ def create_attempt(body:Upload,uid=Depends(user)):
 
 @app.post('/attempts/{attempt_id}/finalize', status_code=202)
 def finalize(attempt_id:uuid.UUID,body:Finalize,uid=Depends(user)):
-    if body.schema_version != 3:
-        raise HTTPException(422, 'Async finalize requires schema_version=3; refresh the frontend')
-    event_count('finalize.activity_events', len(body.activity.events))
-    # No GCS network operations here: DB commit is the durable handoff.
-    with connect() as c:
-        row=owned_attempt(c,attempt_id,uid)
-        if not row: raise HTTPException(404,'Attempt not found')
-        row=commit_finalization(c,row,uid,body)
-    return {'id':str(attempt_id),'status':row['status'],'validated_at':row['validated_at']}
+    with stage('http.finalize'):
+        if body.schema_version != 3:
+            raise HTTPException(422, 'Async finalize requires schema_version=3; refresh the frontend')
+        event_count('finalize.activity_events', len(body.activity.events))
+        # No GCS network operations here: DB commit is the durable handoff.
+        with connect() as c:
+            row=owned_attempt(c,attempt_id,uid)
+            if not row: raise HTTPException(404,'Attempt not found')
+            row=commit_finalization(c,row,uid,body)
+        dispatch_after_commit(row['outbox_event_id'])
+        return {'id':str(attempt_id),'status':row['status'],'validated_at':row['validated_at']}
+
 
 @app.get('/attempts/{attempt_id}')
 def status(attempt_id:uuid.UUID,uid=Depends(user)):

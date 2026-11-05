@@ -145,6 +145,24 @@ API 是可公开调用的 Cloud Run 服务，业务请求仍校验 Supabase 身�
 
 默认 API 每实例并发 20，worker 并发 1，各最多 3 实例；Job 单任务、单并行度。pipeline 镜像使用 Spark local[2]，不是 Dataproc 集群。
 
+## 事件驱动派发增量升级（已有环境）
+
+事件驱动版本在 finalize 主 COMMIT 后尝试发布持久 Outbox，失败由 Relay 补偿。
+API/Worker 仍是私有/公开边界不变的 Cloud Run Services，min instances=0；Relay 仍为
+Job，1 CPU/1Gi，最终每 15 分钟运行。Pipeline 资源不变且继续暂停。
+
+API 新增指定 Topic 的 publisher IAM、EVENT_TOPIC、DIRECT_PUBSUB_ENABLED（默认 false）
+及 DIRECT_PUBSUB_TIMEOUT_S（默认 2）。先部署兼容 v3 的镜像、确认订阅/IAM，再启用直发；
+降频放在直发验收之后。请勿用以下首次部署说明重新初始化已有 remote state。
+
+**2026-11-05 只读检查发现线上 Worker filter 只有 uploaded，源码期望 uploaded 或
+submitted；Scheduler 实际每天两次。订阅替换可能丢积压，本轮未取得有效 Terraform plan。**
+必须先单独制定新旧订阅并行切换方案，保留原 OIDC/DLQ/IAM 和积压；禁止直接 apply。
+生产数据库 017 状态需人工核实，本次没有新增 migration 018。
+
+具体修改、测试、导入基准、分阶段计划、费用假设和回滚见
+[事件驱动派发实施记录](RELAY_EVENT_DRIVEN_IMPLEMENTATION_ZH.md)。
+
 ## 7. 首次部署顺序
 
 以下是运行说明，不应把计划文件或数据库凭据提交 Git。

@@ -1,5 +1,6 @@
 """Atomic Challenge v2 commit. Caller owns the database transaction."""
-from .timing import stage, sql, event_count
+import logging
+from .timing import stage, sql, event_count, trace_id
 from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 from .activity import _save_activity_locked
@@ -21,7 +22,8 @@ def commit_finalization(c, row, uid, body):
     if locked.get('finalization') is not None:
         if locked['finalization'] != canonical:
             raise HTTPException(409, 'Finalization identity conflict')
-        return {key: locked[key] for key in ('id', 'status', 'validated_at')}
+        return {**{key: locked[key] for key in ('id', 'status', 'validated_at')},
+                'outbox_event_id': _pending_outbox_event(c, attempt_id)}
     if locked['status'] != 'CREATED':
         raise HTTPException(409, 'Attempt lacks a valid finalization')
     events = validate_finalization(locked, body, uid)
@@ -36,6 +38,14 @@ def commit_finalization(c, row, uid, body):
     project_challenge(c, locked, body)
     payload = dict(event_type='performance.submitted', attempt_id=str(attempt_id),
                    learner_key=str(locked['learner_key']), source_environment=locked['source_environment'])
-    sql(c, 'outbox.insert', 'insert into public.piano_outbox(event_type,aggregate_id,payload) values(%s,%s,%s) on conflict do nothing',
-              ('performance.submitted', str(attempt_id), Jsonb(payload)))
+    event = sql(c, 'outbox.insert', 'insert into public.piano_outbox(event_type,aggregate_id,payload) values(%s,%s,%s) on conflict do nothing returning event_id,published_at',
+              ('performance.submitted', str(attempt_id), Jsonb(payload))).fetchone()
+    receipt['outbox_event_id'] = (event['event_id'] if event['published_at'] is None else None) if event else _pending_outbox_event(c, attempt_id)
     return receipt
+
+
+def _pending_outbox_event(c, attempt_id):
+    event = sql(c, 'outbox.existing', "select event_id,published_at from public.piano_outbox where event_type='performance.submitted' and aggregate_id=%s", (str(attempt_id),)).fetchone()
+    if event is None:
+        logging.getLogger('uvicorn.error').warning('request_id=%s stage=outbox.existing outcome=missing', trace_id.get())
+    return event['event_id'] if event and event['published_at'] is None else None
