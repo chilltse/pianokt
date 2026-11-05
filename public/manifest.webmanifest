@@ -1,9 +1,9 @@
 {
-  "name": "pianoKT",
-  "short_name": "pianoKT",
+  "name": "Piano KT",
+  "short_name": "Piano KT",
   "description": "app for learning piano",
   "start_url": "/",
-  "display": "standalone",
+  "display": "fullscreen",
   "icons": [
     {
       "src": "/icon-192.png",
@@ -15,5 +15,9 @@
       "sizes": "512x512",
       "type": "image/png"
     }
-  ]
+  ],
+  "id": "/",
+  "scope": "/",
+  "background_color": "#fafaf8",
+  "theme_color": "#fafaf8"
 }

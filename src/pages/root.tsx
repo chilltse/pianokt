@@ -13,6 +13,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
           content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, viewport-fit=cover"
         />
 
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <meta name="theme-color" content="#fafaf8" />
+
         <title>Piano KT</title>
         <meta name="author" content="Nanxuan Xie" />
         <meta name="description" content="app for learning piano with AI powered knowledge tracing" />
