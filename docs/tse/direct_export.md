@@ -18,13 +18,13 @@ pianokt-data export-attempts \
   pianokt-data export-training \
   --source direct \
   --environment production \
-  --cutoff 2026-11-06T00:00:00Z \
-  --output-key datasets/training-20261106-new.json
+  --cutoff 2026-11-06T23:00:00Z \
+  --output-key datasets/training-20261106-test.json
 
 
 gcloud storage cp \
-  "${RAW_ROOT%/}/datasets/training-20261106-new.json" \
-  docs/tse/training-20261106-keyboard-new.json
+  "${RAW_ROOT%/}/datasets/training-20261106-test.json" \
+  output/training-20261106-test.json
   
 
 

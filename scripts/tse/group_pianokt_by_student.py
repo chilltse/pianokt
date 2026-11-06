@@ -140,5 +140,5 @@ if __name__ == "__main__":
 
 
 # python group_pianokt_by_student.py \
-#   training-20261106.json \
-#   grouped.json
+#   output/training-20261106-test.json \
+#   output/organized/training-20261106-test.json

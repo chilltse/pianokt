@@ -2,7 +2,8 @@
     {
       "origin": [
         "http://localhost:5173",
-        "https://pianokt-anu.vercel.app"
+        "https://pianokt-anu.vercel.app",
+        "https://www.pianokt.lol"
       ],
       "method": ["GET", "PUT", "HEAD"],
       "responseHeader": [
