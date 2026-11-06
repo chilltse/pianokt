@@ -142,3 +142,7 @@ CLI 同样读取真实数据库上下文并使用 UTC/版本选择。兼容的�
 attempt 外层 manifest schema 是 1.2；events_data 与 kc_labeler_version 仍为 v1.1；完整 alignment JSON schema_version 为 3。根目录示例文件名 v1_1 保留，但编号为示意值，不是真实学生历史。
 
 两个 exporter 只生成数据。学生/时间拆分、序列窗口、训练、评估和模型发布仍需要独立实现。
+
+## KC 1.2.0 更新
+
+当前新结果与导出使用 `kc_labeler_version: "1.2.0"`，取代导出中的 `feature_version`。events_data 保持列式形状，但 Reference onset 改为共享 Matcher 的 30 ms 首音锚定分组；历史无版本结果单独标识为 v1.1，禁止混合版本导出。缓存身份包含 KC 版本，升级需要重跑 Alignment，不修改旧结果。详细契约见 [KC Labeler 1.2.0](KC_ML/KC_LABELER_1_2_0.md)。

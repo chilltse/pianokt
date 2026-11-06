@@ -20,6 +20,9 @@ import numpy as np
 import pandas as pd
 
 from . import labels as note_labels, events
+from .feature_extraction import resolve_kc_version, extract_reference_features
+from .serialization import alignment_records
+from .hands import parse_midi_song_for_hand_inference, parser_infer_hands
 from .time_guided import (
     align_chords,
     group_chords,
@@ -83,6 +86,7 @@ def alignment_run_id(
     observed_end_sec: float | None = None,
     transport_segments: Any = None,
     reference_origin_sec: float = 0.0,
+    *, kc_labeler_version: str | None = None,
 ) -> str:
     """Return a stable result ID, including time context that changes output."""
 
@@ -95,6 +99,10 @@ def alignment_run_id(
         digest(performance.read_bytes()),
         config.identity,
         matcher_version(),
+        resolve_kc_version(kc_labeler_version),
+        # Output-contract identity: old immutable results lack event source IDs
+        # and may serialize integer-domain fields as floats. Do not reuse them.
+        "event-source-ids-nullable-integers-attempt-context",
         _context_identity(
             performance_events,
             observed_end_sec,
@@ -293,6 +301,7 @@ def align(
     observed_end_sec: float | None = None,
     transport_segments: Any = None,
     reference_origin_sec: float = 0.0,
+    *, kc_labeler_version: str | None = None,
 ):
     """Time-guided, monotonic challenge alignment.
 
@@ -302,6 +311,7 @@ def align(
     time used by reference MIDI. ``observed_end_sec`` is already relative.
     """
 
+    kc_labeler_version = resolve_kc_version(kc_labeler_version)
     for path in (reference, performance):
         check_midi(path)
     reference_all = read_midi_notes(str(reference))
@@ -379,7 +389,7 @@ def align(
         rows_from_operations(reference_chords, performance_chords, operations),
         columns=_RAW_COLUMNS,
     )
-    raw_records = json.loads(raw.to_json(orient="records"))
+    raw_records = alignment_records(raw)
     if audit.supplied:
         # This is the essential semantics change: do not calibrate away a
         # student's initial latency, dragging, or anticipatory playing.
@@ -426,15 +436,11 @@ def align(
     )
 
     labels = configured_labels(config)
-    # Export only the score events inside the observed performance range.  This
-    # is the canonical v1.1 onset dataset; later score events are absent rather
-    # than fabricated as deletions.
-    hands = labels.build_attempt_events_data(df, reference) if reference_chords else {
-        "kc_feature_names": labels.KC_FEATURE_NAMES,
-        "onset_seconds": [], "pitches": [], "intervals_seconds": [], "kc_vectors": [],
-        "reject_reason": {"event": [], "note": []}, "timing_offset_ms": [],
-        "pitch_offset_semitones": [], "extra_notes": [],
-    }
+    hand_mapping = (parser_infer_hands(parse_midi_song_for_hand_inference(reference), "原曲 MIDI")
+                    if reference_chords else {"left": None, "right": None})
+    features = extract_reference_features(reference_chords, hand_mapping,
+                                          kc_labeler_version=kc_labeler_version)
+    hands = labels.build_attempt_events_data(features, df)
     # Error codes belong exclusively to target score notes. An insertion is an
     # extra performance note, so it has no target-note reject_reason; it is
     # represented by events_data.extra_notes instead.
@@ -449,7 +455,7 @@ def align(
     score_hash, performance_hash = digest(reference.read_bytes()), digest(performance.read_bytes())
     run_id = alignment_run_id(
         reference, performance, attempt_id, config, performance_events, explicit_end,
-        transport_segments, origin,
+        transport_segments, origin, kc_labeler_version=kc_labeler_version,
     )
     df["alignment_event_id"] = [stable_id(run_id, index) for index in range(len(df))]
     for key, value in {
@@ -507,10 +513,10 @@ def align(
             "raw_matches": raw_records,
         })
     return {
-        "schema_version": 3, "alignment_run_id": run_id, "attempt_id": attempt_id,
+        "schema_version": 3, "kc_labeler_version": features.kc_labeler_version, "alignment_run_id": run_id, "attempt_id": attempt_id,
         "score_version": score_hash, "performance_hash": performance_hash,
         "config": config.identity, "matcher_version": matcher_version(),
         "alignment_context": context, "diagnostics": diagnostics, "summary": summary,
-        "raw_matches": raw_records, "notes": json.loads(df.to_json(orient="records")),
+        "raw_matches": raw_records, "notes": alignment_records(df),
         "events_data": hands,
     }

@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from psycopg.types.json import Jsonb
 from .online import connect
+from .attempt_context import attempt_context, attach_attempt_context
 from .timing import stage
 from .upload_validation import validate_files, InvalidUpload
 from .projections import project_challenge
@@ -15,6 +16,7 @@ from .upload_contracts import Finalize
 from .storage import Objects
 from .contracts import digest,AlignmentConfig
 from .alignment.service import align,alignment_run_id,matcher_version
+from .alignment.feature_extraction import resolve_kc_version, ReferenceGroupingMismatch
 
 
 def _finite_nonnegative(value,default=None):
@@ -98,6 +100,7 @@ def _is_current_result(result,row,config,expected_run,observed_end_sec,reference
         and result.get('score_version')==row['reference_hash']
         and result.get('performance_hash')==row['performance_hash']
         and result.get('matcher_version')==matcher_version()
+        and result.get('kc_labeler_version')==resolve_kc_version()
         and result.get('config')==config.identity
         and result.get('source_environment','unknown')==row.get('source_environment','unknown')
         and context.get('reference_origin_sec')==reference_origin_sec
@@ -188,6 +191,7 @@ def process(attempt_id):
                 )
                 if result['alignment_run_id']!=run:
                     raise ValueError('Alignment run identity mismatch')
+                attach_attempt_context(result, attempt_context(row))
                 result.update(
                 learner_key=str(row['learner_key']),
                 song_id=row['song_id'],
@@ -204,7 +208,7 @@ def process(attempt_id):
             )
                 quality_valid,quality_reason=_quality(result)
                 for note in result['notes']:
-                    note['within_observed_range']=observed_end_sec is None or note.get('ref_onset_sec') is None or note['ref_onset_sec']<=observed_end_sec
+                    note['within_observed_range']=observed_end_sec is None or note.get('ref_onset_sec') is None or note['ref_onset_sec']<=observed_end_sec+config.chord_onset_tolerance_sec
                     note['timing_labels_valid']=not settings.get('waiting',False) and quality_valid
                     note['alignment_quality_valid']=quality_valid
                     note['alignment_quality_reason']=quality_reason
@@ -238,7 +242,7 @@ def process(attempt_id):
             commit_alignment(c,attempt_id,lease_token,result_key,result)
     except Exception as exc:
         invalid=isinstance(exc,InvalidUpload)
-        exhausted=row['processing_attempts']>=8
+        exhausted=row['processing_attempts']>=8 or isinstance(exc,ReferenceGroupingMismatch)
         state='INVALID' if invalid else ('FAILED' if exhausted else 'RETRY')
         with connect() as c:
             c.execute("""update public.piano_attempts set status=%s,error_code=%s,validation_error=%s,

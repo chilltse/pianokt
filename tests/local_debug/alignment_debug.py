@@ -32,6 +32,7 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY / "backend"))
 
 from pianokt_backend.alignment.service import align  # noqa: E402
+from pianokt_backend.attempt_context import attach_attempt_context
 
 
 def number(value, default=None):
@@ -156,8 +157,10 @@ def main():
     source.add_argument("--reference", type=Path, help="Reference MIDI; requires --performance")
     parser.add_argument("--performance", type=Path, help="Performance MIDI")
     parser.add_argument("--events", type=Path, help="performance-events.json sidecar")
-    parser.add_argument("--attempt-id", default="local-debug")
-    parser.add_argument("--reference-origin", type=float, default=0.0)
+    parser.add_argument("--kc-labeler-version", help="Registered KC version (default: registry default)")
+    parser.add_argument("--attempt-id")
+    parser.add_argument("--attempt-context", type=Path, help="Replay metadata; auto-detected beside Reference MIDI")
+    parser.add_argument("--reference-origin", type=float)
     parser.add_argument("--observed-end", type=float)
     parser.add_argument("--output", type=Path, required=True, help="Output path without .json/.svg")
     args = parser.parse_args()
@@ -167,17 +170,24 @@ def main():
     else:
         if not args.performance:
             parser.error("--performance is required with --reference")
+        context_path = args.attempt_context or args.reference.parent / 'attempt-context.json'
+        context = json.loads(context_path.read_text()) if context_path.exists() else {}
+        if args.attempt_context and not context_path.exists():
+            parser.error("--attempt-context file does not exist")
         sidecar = json.loads(args.events.read_text()) if args.events else None
         segments = sidecar.get("transportSegments") if isinstance(sidecar, dict) else None
         result = align(
             args.reference,
             args.performance,
-            args.attempt_id,
+            args.attempt_id or context.get("attempt_id") or "local-debug",
             performance_events=sidecar,
-            observed_end_sec=args.observed_end,
+            observed_end_sec=args.observed_end if args.observed_end is not None else context.get("observed_end_sec"),
             transport_segments=segments,
-            reference_origin_sec=args.reference_origin,
+            reference_origin_sec=args.reference_origin if args.reference_origin is not None else context.get("reference_origin_sec", 0.0),
+            kc_labeler_version=args.kc_labeler_version,
         )
+
+        attach_attempt_context(result, context)
 
     output = args.output
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -117,3 +117,17 @@ def test_generation_is_pinned_and_size_checked_before_download(tmp_path):
     calls.clear();blob.size=4
     with pytest.raises(InvalidUpload): read_verified(store,row,'performance',3,{})
     assert calls==['reload']
+
+
+def test_reference_contract_failure_is_terminal_internal_error(db, monkeypatch, tmp_path):
+    prepare(db, monkeypatch, tmp_path)
+    def fail(*args, **kwargs):
+        raise worker.ReferenceGroupingMismatch('group=0 missing ref_id=r0_n0')
+    monkeypatch.setattr(worker, 'align', fail)
+    worker.process(A)
+    row = db.execute('select * from piano_attempts').fetchone()
+    assert row['status'] == 'FAILED'
+    assert row['error_code'] == 'ReferenceGroupingMismatch'
+    assert row['validation_error'] is None
+    assert row['result_key'] is None
+    assert not list(tmp_path.glob('alignment/*/result.json'))

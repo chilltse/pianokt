@@ -3,6 +3,7 @@ from .selection import utc, eligible_results, rejection, select_one, attempt_ord
 from ..contracts import stable_id
 from .attempts import filter_context
 from ..provenance import export_environment
+from .kc_versions import result_kc_version, dataset_kc_version
 
 def export_dataset(objects,tables,cutoff,output_key, context=None, run_selection=None, environment='production'):
     environment=export_environment(environment)
@@ -29,9 +30,9 @@ def export_dataset(objects,tables,cutoff,output_key, context=None, run_selection
             examples.append(dict(learner_key=r['learner_key'],attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],event_index=i,onset_seconds=onset,pitches=data['pitches'][i],kc_vector=data['kc_vectors'][i],correct=1-int(reason),reject_reason=reason,ordering_timestamp=utc(started).isoformat(),ordering_source='started_at' if a or r.get('attempt_started_at') else 'legacy_upload_time'))
     examples.sort(key=lambda e: (attempt_order_key(by_id[e['attempt_id']]) if e['attempt_id'] in by_id else (str(e['learner_key']),utc(e['ordering_timestamp']),'',0,e['attempt_id']))+(e['onset_seconds'],e['event_index']))
     provenance=[dict(attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],
-                     matcher_version=r.get('matcher_version'),result_digest=r.get('_committed_digest'))
+                     matcher_version=r.get('matcher_version'),kc_labeler_version=result_kc_version(r),result_digest=r.get('_committed_digest'))
                 for r in sorted(selected.values(),key=lambda r:r['attempt_id'])]
     payload=dict(source_environment=environment,source='postgres-ready-v1' if hasattr(tables,'results') else 'lake-completed-v1',
-                 feature_version='v1.1',quality_policy='quality-valid-and-not-waiting',runs=provenance,dataset_version=stable_id(cutoff,environment,examples,provenance),cutoff=utc(cutoff).isoformat(),examples=examples,warning='Split students/time before windowing. No trained model is included.')
+                 kc_labeler_version=dataset_kc_version(selected.values()),quality_policy='quality-valid-and-not-waiting',runs=provenance,dataset_version=stable_id(cutoff,environment,examples,provenance,dataset_kc_version(selected.values())),cutoff=utc(cutoff).isoformat(),examples=examples,warning='Split students/time before windowing. No trained model is included.')
     objects.json(output_key,payload)
     return payload['dataset_version']

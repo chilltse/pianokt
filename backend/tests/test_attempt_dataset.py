@@ -111,3 +111,36 @@ def test_environment_filtered_before_indices_and_unknown_never_promoted(tmp_path
     assert [(r['visit_index'],r['attempt_index']) for r in rows]==[(1,1),(2,3)]
     raw=store.read('datasets/filtered/attempt_metadata.json')
     assert b'"attempt_id":"dev"' not in raw and b'"attempt_id":"unknown"' not in raw
+
+
+@pytest.mark.parametrize('mixed', [False, True])
+def test_actual_kc_version_propagates_or_mixed_export_fails(tmp_path, mixed):
+    from pianokt_backend.pipeline.training import export_dataset
+    store, tables, context = fixture(tmp_path)
+    original = store.read
+    def read(key):
+        raw = original(key)
+        if key.startswith('alignment/'):
+            result = json.loads(raw)
+            if not mixed or result['attempt_id'] == 'a1':
+                result['kc_labeler_version'] = '1.2.0'
+            return json.dumps(result).encode()
+        return raw
+    store.read = read
+    if mixed:
+        with pytest.raises(ValueError, match='Mixed KC'):
+            export_attempts(store, tables, '2026-02-01T00:00:00Z', 'datasets/new', context)
+        with pytest.raises(ValueError, match='Mixed KC'):
+            export_dataset(store, tables, '2026-02-01T00:00:00Z', 'datasets/train.json', context)
+        assert store.keys('datasets') == []
+    else:
+        manifest = export_attempts(store, tables, '2026-02-01T00:00:00Z', 'datasets/new', context)
+        assert manifest['kc_labeler_version'] == '1.2.0'
+        for record in map(json.loads, store.read('datasets/new/attempts.jsonl').splitlines()):
+            assert record['kc_labeler_version'] == '1.2.0'
+            assert record['events_data']['reject_reason']['note'] == [[[0], [0]], [[], [1]]]
+        assert all(r['kc_labeler_version'] == '1.2.0' for r in json.loads(store.read('datasets/new/index_map.json')))
+        export_dataset(store, tables, '2026-02-01T00:00:00Z', 'datasets/train.json', context)
+        training = json.loads(store.read('datasets/train.json'))
+        assert training['kc_labeler_version'] == '1.2.0'
+        assert 'feature_version' not in training and 'feature_version' not in manifest

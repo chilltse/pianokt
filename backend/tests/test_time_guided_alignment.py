@@ -287,3 +287,41 @@ def test_gold_is_quality_gated_and_attempt_fact_preserves_committed_versions(tmp
         False,
         "legacy_alignment_without_quality_gate",
     )
+
+
+def test_canonical_onsets_and_observed_end_tolerance(tmp_path):
+    reference, performance = tmp_path/'reference.mid', tmp_path/'performance.mid'
+    # 20 ms belongs to the first group; 40 ms starts a new group.
+    # The final target is outside the observed-end + 30 ms boundary.
+    notes = [(60, 0, .01), (64, .02, .01), (67, .04, .01), (72, .2, .01)]
+    write_midi(reference, notes)
+    write_midi(performance, notes[:3])
+    result = align(reference, performance, 'boundary', performance_events=sidecar(notes[:3]), observed_end_sec=.02)
+    assert result['kc_labeler_version'] == '1.2.0'
+    assert result['diagnostics']['reference_chords_observed'] == 2
+    assert len(result['events_data']['onset_seconds']) == 2
+    from pianokt_backend.alignment.time_guided import read_midi_notes, group_chords
+    canonical = group_chords(read_midi_notes(str(reference)), .03)
+    assert result['events_data']['onset_seconds'] == [c.onset_sec for c in canonical[:2]]
+    assert result['events_data']['pitches'] == [[[], [60, 64]], [[], [67]]]
+    assert all(n['ref_pitch'] != 72 for n in result['notes'])
+
+
+def test_json_integer_domains_with_missing_and_extra_notes(tmp_path):
+    import json
+    from pianokt_backend.alignment.serialization import INTEGER_NOTE_FIELDS
+    reference, performance = tmp_path/'reference.mid', tmp_path/'performance.mid'
+    write_midi(reference, [(60, 0, .1), (64, 1, .1)])
+    played = [(61, 0, .1), (80, .5, .1)]
+    write_midi(performance, played)
+    result = json.loads(json.dumps(align(reference, performance, 'integer-domains',
+        performance_events=sidecar(played), observed_end_sec=1.1), allow_nan=False))
+    assert {'match', 'deletion', 'insertion'} <= {n['alignment_type'] for n in result['notes']}
+    for collection in ('notes', 'raw_matches'):
+        for row in result[collection]:
+            assert all(row[k] is None or type(row[k]) is int for k in INTEGER_NOTE_FIELDS if k in row)
+    assert any(n['reject_reason'] == 2 and type(n['reject_reason']) is int for n in result['notes'])
+    for row in result['notes']:
+        if row['alignment_type'] == 'insertion':
+            assert row['reject_reason'] is None
+    assert result['events_data']['ref_note_ids'] == [[[], [['r0_n0']]], [[], [['r0_n1']]]]

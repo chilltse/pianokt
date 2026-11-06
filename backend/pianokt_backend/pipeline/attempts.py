@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from ..contracts import stable_id
 from ..provenance import export_environment
+from .kc_versions import result_kc_version, dataset_kc_version
 
 
 from .selection import utc, eligible_results, rejection, select_one, attempt_order_key
@@ -61,11 +62,44 @@ def validate_events(data):
     if any(a >= b for a, b in zip(data['onset_seconds'], data['onset_seconds'][1:])):
         raise ValueError('Target onsets must be strictly increasing')
     for i in range(n):
-        if reasons['event'][i] not in (0, 1) or len(data['kc_vectors'][i]) != 6:
+        if reasons['event'][i] not in (0, 1) or len(data['kc_vectors'][i]) != len(data.get('kc_feature_names', range(6))):
             raise ValueError('Invalid event label or KC vector')
         for k, array in [('pitches', data['pitches']), ('note', reasons['note']), ('timing', data['timing_offset_ms']), ('pitch', data['pitch_offset_semitones'])]:
             if len(array[i]) != 2 or any(len(array[i][h]) != len(data['pitches'][i][h]) for h in (0, 1)):
                 raise ValueError(f'Invalid hand shape: {k}')
+
+    # Historical exports lack identity columns. New identity columns are an
+    # all-or-nothing extension; validate them without guessing IDs for legacy.
+    identity_fields = ('onset_ids', 'reference_chord_indices', 'reference_group_note_ids', 'ref_note_ids')
+    if any(key in data for key in identity_fields):
+        if any(not isinstance(data.get(key), list) or len(data[key]) != n for key in identity_fields):
+            raise ValueError('Invalid event identity array lengths')
+        if any(not isinstance(x, str) or not x for x in data['onset_ids']) or len(set(data['onset_ids'])) != n:
+            raise ValueError('Invalid or duplicate onset_ids')
+        indices = data['reference_chord_indices']
+        if any(type(x) is not int or x < 0 for x in indices) or any(a >= b for a, b in zip(indices, indices[1:])):
+            raise ValueError('Invalid reference_chord_indices')
+        all_members = set()
+        for i in range(n):
+            members = data['reference_group_note_ids'][i]
+            if not isinstance(members, list) or not members or any(not isinstance(x, str) or not x for x in members):
+                raise ValueError('Invalid Reference group members')
+            if len(set(members)) != len(members) or all_members.intersection(members):
+                raise ValueError('Reference member consumed more than once')
+            all_members.update(members)
+            hands = data['ref_note_ids'][i]
+            if not isinstance(hands, list) or len(hands) != 2:
+                raise ValueError('Invalid ref_note_ids hand shape')
+            targets = set()
+            for h in (0, 1):
+                if not isinstance(hands[h], list) or len(hands[h]) != len(data['pitches'][i][h]):
+                    raise ValueError('Invalid ref_note_ids pitch shape')
+                for ids in hands[h]:
+                    if not isinstance(ids, list) or not ids or any(not isinstance(x, str) or x not in members for x in ids):
+                        raise ValueError('Invalid target Reference IDs')
+                    if len(set(ids)) != len(ids) or targets.intersection(ids):
+                        raise ValueError('Target Reference member consumed more than once')
+                    targets.update(ids)
 
 
 def build_record(result, context, visit_index, attempt_index):
@@ -93,7 +127,7 @@ def build_record(result, context, visit_index, attempt_index):
         time_playing=float(context['time_playing']), is_played_in_full='t' if context['is_played_in_full'] else 'f',
         exit_status='quit' if context['exit_status'] == 'abandoned' else context['exit_status'],
         exercise_part_index=settings.get('exercise_part_index', 0),
-        kc_labeler_version='v1.1', events_data=data,
+        kc_labeler_version=result_kc_version(result), events_data=data,
     )
 
 
@@ -124,6 +158,7 @@ def export_attempts(objects, tables, cutoff, output_prefix, context, run_selecti
         if reason:
             skipped[reason] += 1; continue
         select_one(selected,r)
+    kc_version = dataset_kc_version(selected.values())
     records = []; mappings = []
     for a in attempts:
         aid = str(a['attempt_id']); r = selected.get(aid)
@@ -134,7 +169,7 @@ def export_attempts(objects, tables, cutoff, output_prefix, context, run_selecti
         records.append(build_record(r, a, vi, ai))
         mappings.append(dict(user_id=str(a['learner_key']), visit_index=vi, attempt_index=ai,
                              attempt_id=aid, visit_id=str(a['visit_id']), alignment_run_id=r['alignment_run_id'], score_version=r['score_version'],
-                             matcher_version=r.get('matcher_version'), feature_version='v1.1',
+                             matcher_version=r.get('matcher_version'), kc_labeler_version=result_kc_version(r),
                              result_digest=r.get('_committed_digest')))
     # No auth user IDs leave the context snapshot. Timestamps remain separate.
     visit_rows = [{**{k: v for k, v in row.items() if k not in ('user_id', 'learner_key')}, 'user_id': str(row['learner_key']), 'visit_index': visit_indices[str(row['id'])]} for row in visits]
@@ -147,7 +182,7 @@ def export_attempts(objects, tables, cutoff, output_prefix, context, run_selecti
                     outcome_semantics='exit_status is client-reported; completion_reason is transport terminal; aligned grade is separate', cutoff=utc(cutoff).isoformat(),
                     count=len(records), skipped=dict(skipped),
                     source='postgres-ready-v1' if hasattr(tables,'results') else 'lake-completed-v1',
-                    feature_version='v1.1', quality_policy='quality-valid-and-not-waiting', ordering='Per learner: UTC started_at; visit ID, within-visit attempt sequence, attempt ID break ties. Indices assigned before quality filtering.',
+                    kc_labeler_version=kc_version, quality_policy='quality-valid-and-not-waiting', ordering='Per learner: UTC started_at; visit ID, within-visit attempt sequence, attempt ID break ties. Indices assigned before quality filtering.',
                     context_files=['visits.json', 'attempt_metadata.json', 'attempt_events.json', 'index_map.json'],
                     context_semantics='Metadata is captured at export time; cutoff filters accepted history and labels, not historical visit liveness. Preserve this immutable snapshot for reproduction.')
     files={'attempts.jsonl': ''.join(json.dumps(r, ensure_ascii=False, allow_nan=False)+'\n' for r in records).encode()}

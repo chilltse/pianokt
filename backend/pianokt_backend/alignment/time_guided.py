@@ -659,6 +659,10 @@ def align_chords(
     )
 
 
+def reference_note_id(note: MidiNote) -> str:
+    return f"r{note.track if note.track is not None else 'x'}_n{note.sequence}"
+
+
 def _row(
     alignment_type: str,
     reference: MidiNote | None,
@@ -674,7 +678,7 @@ def _row(
         # distinguish repeated pitches at different score positions.  They are
         # deterministic within the immutable reference/performance artifacts.
         "ref_id": (
-            f"r{reference.track if reference.track is not None else 'x'}_n{reference.sequence}"
+            reference_note_id(reference)
             if reference is not None
             else None
         ),

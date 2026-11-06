@@ -14,6 +14,7 @@ tsconfig.tsbuildinfo
 .react-router/
 /build/
 output/
+ask_gpt.md
 
 # Vercel CLI
 .vercel/
