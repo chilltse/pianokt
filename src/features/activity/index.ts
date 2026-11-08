@@ -1,3 +1,4 @@
+import type { OfficialMidiIdentity } from '@/types'
 import { ActivityTracker, type Activity, type ActivityEvent, type AttemptContext } from './tracker'
 
 export type { Activity, ActivityEvent, AttemptContext } from './tracker'
@@ -97,9 +98,15 @@ export function setActivitySession(
   }
 }
 
-export function beginAttempt(id: string, songId: string, source: string, startedAt: string) {
+export function beginAttempt(
+  id: string,
+  songId: string,
+  source: string,
+  startedAt: string,
+  identity?: OfficialMidiIdentity,
+) {
   if (!tracker) return null
-  const context = tracker.begin(id, songId, source, startedAt)
+  const context = tracker.begin(id, songId, source, startedAt, identity)
   attemptOwners.set(context, tracker)
   return context
 }

@@ -5,10 +5,12 @@ import {
   type AttemptContext,
 } from '@/features/activity'
 import type { PlayEventType } from '@/features/challenge-history'
+import type { OfficialMidiIdentity } from '@/types'
 import { useRef, useState } from 'react'
 
 /** Attempt wall-clock accounting and immutable event sequence, independent of MIDI/player UI. */
 export function useChallengeAttempt(options: {
+  officialIdentity?: OfficialMidiIdentity
   songId: string
   source: string
   songTime: () => number
@@ -96,7 +98,13 @@ export function useChallengeAttempt(options: {
     if (!sessionId) return
     const clientTs = new Date().toISOString()
     if (eventType === 'play_started') {
-      attemptContextRef.current = beginAttempt(sessionId, options.songId, options.source, clientTs)
+      attemptContextRef.current = beginAttempt(
+        sessionId,
+        options.songId,
+        options.source,
+        clientTs,
+        options.officialIdentity,
+      )
     }
     challengeEventsRef.current.push({
       eventId: crypto.randomUUID(),

@@ -94,9 +94,9 @@ export default function SongPreviewModal({
               }}
             />
           )}
-          {id && source && <SongPreview songId={id} source={source} />}
+          {id && source && <SongPreview id={id} source={source} />}
         </div>
-        <div className="flex min-h-0 w-full min-w-0 flex-col border-t border-gray-200 bg-white lg:w-[420px] lg:border-l lg:border-t-0">
+        <div className="flex min-h-0 w-full min-w-0 flex-col border-t border-gray-200 bg-white lg:w-[420px] lg:border-t-0 lg:border-l">
           <div className="px-6 pt-6 pb-3">
             <Heading
               className="truncate text-xl leading-tight font-semibold text-gray-900"
@@ -105,8 +105,8 @@ export default function SongPreviewModal({
               {title}
             </Heading>
             <Text className="mt-2 text-sm font-medium text-gray-500">
-            {isChallenge ? 'Challenge Preview' : 'MIDI Preview'}
-          </Text>
+              {isChallenge ? 'Challenge Preview' : 'MIDI Preview'}
+            </Text>
           </div>
           <div className="px-6 pb-6">
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">

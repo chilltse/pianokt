@@ -13,7 +13,16 @@ export type DifficultyLabel =
 
 export type SongSource = 'local' | 'builtin' | 'generated' | 'base64'
 export type SongMetadata = {
+  /** Playable entry: official segment UUID, or a local/generated source ID. */
   id: string
+  midi_sha256?: string
+  storage_path?: string
+  song_id?: string
+  song_title?: string
+  segment_id?: string
+  segment_index?: number
+  segment_title?: string | null
+  composer?: string
   file: string
   title: string
   difficulty: number
@@ -69,7 +78,15 @@ export type SongMeasure = {
   number: number
 }
 
+export type OfficialMidiIdentity = {
+  song_id: string
+  segment_id: string
+  segment_index: number
+  midi_sha256: string
+}
+
 export type Song = {
+  officialIdentity?: OfficialMidiIdentity
   tracks: Tracks
   duration: number
   measures: Array<SongMeasure>

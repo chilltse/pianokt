@@ -35,7 +35,7 @@ import {
 import { TopBar } from '@/pages/play/components'
 import CountdownOverlay from '@/pages/play/components/CountdownOverlay'
 import { StatsPopup } from '@/pages/play/components/StatsPopup'
-import { MidiStateEvent, SongConfig, SongSource } from '@/types'
+import { MidiStateEvent, OfficialMidiIdentity, Song, SongConfig, SongSource } from '@/types'
 import { bytesToBase64 } from '@/utils'
 import * as RadixToast from '@radix-ui/react-toast'
 import clsx from 'clsx'
@@ -87,7 +87,9 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
   const countdownTotal = useAtomValue(player.countdownTotal)
   const countdownRemaining = useAtomValue(player.countdownRemaining)
   const synth = useLazyStableRef(() => getSynthStub('acoustic_grand_piano'))
-  let { data: song, error, isLoading } = useSong(id, source)
+  const { data: loadedSong, error, isLoading } = useSong(id, source)
+  const [assignedSong, setAssignedSong] = useState<Song>()
+  const song = assignedSong ?? loadedSong
   let songMeta = useSongMetadata(id, source)
   const [songConfig, setSongConfig] = useSongSettings(id)
   const [isStatsVisible, setIsStatsVisible] = useState(false)
@@ -104,6 +106,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
   const challengeAssignmentRef = useRef<{
     range: { start: number; end: number }
     config: SongConfig
+    song: Song | undefined
   } | null>(null)
   // The upload outlives this route, so toasts must not fire after unmount.
   const isMountedRef = useRef(true)
@@ -221,13 +224,15 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     recordChallengeEvent,
     toActivityEvent,
   } = useChallengeAttempt({
-    songId: id,
+    songId: song?.officialIdentity?.song_id ?? id,
+    officialIdentity: song?.officialIdentity,
     source,
     songTime: nowSongSec,
     songDuration: () => getSongDurationSec(),
     difficulty: songMeta?.difficulty ?? null,
     isMounted: () => isMountedRef.current,
     resetAssignment: () => {
+      setAssignedSong(undefined)
       challengeAssignmentRef.current = null
     },
   })
@@ -272,6 +277,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
 
   const freezeChallengeAssignment = () => {
     if (challengeAssignmentRef.current) return challengeAssignmentRef.current
+    setAssignedSong(song)
     const requestedSongTime = nowSongSec()
     const durationSec = getSongDurationSec() || song?.duration || requestedSongTime
     const configuredEnd = selectedRange?.end ?? durationSec
@@ -282,6 +288,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
         ? (selectedRange?.start ?? 0)
         : Math.max(0, Math.min(requestedSongTime, configuredEnd))
     const assignment = {
+      song,
       range: { start, end: Math.max(start, configuredEnd) },
       config: JSON.parse(JSON.stringify(songConfig)) as SongConfig,
     }
@@ -306,6 +313,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
   const requestChallengeTransport = (
     eventType: Extract<PlayEventType, 'play_started' | 'resumed'>,
   ) => {
+    if (!song || (source === 'builtin' && !song.officialIdentity)) return
     if (eventType === 'play_started') freezeChallengeAssignment()
     pendingTransportEventRef.current = eventType
     player.play()
@@ -333,6 +341,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     sessionId: string
     midiBytes: Uint8Array | null
     performanceEvents: PerformanceEventsAudit
+    officialIdentity?: OfficialMidiIdentity
     referenceMidiBase64: string
     referenceConfig: SongConfig
     observedRange: { start: number; end: number }
@@ -387,7 +396,10 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     const result = await saveChallengeRecording({
       schemaVersion: 2,
       songSource: source,
-      songId: id,
+      songId: params.officialIdentity?.song_id ?? id,
+      midiSha256: params.officialIdentity?.midi_sha256,
+      segmentId: params.officialIdentity?.segment_id,
+      segmentIndex: params.officialIdentity?.segment_index,
       songTitle: songMeta?.title ?? null,
       durationSec: durationSec > 0 ? durationSec : 1,
       midiBase64: base64,
@@ -406,6 +418,12 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
         transpose: params.referenceConfig.transpose,
         time_basis: 'song_time',
         played_until_sec: params.playedUntilSec,
+        tracks: Object.fromEntries(
+          Object.entries(params.referenceConfig.tracks).map(([id, track]) => [
+            id,
+            { hand: track.hand },
+          ]),
+        ),
         left: params.referenceConfig.left,
         right: params.referenceConfig.right,
       },
@@ -445,6 +463,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     sessionId: string
     midiBytes: Uint8Array
     performanceEvents: PerformanceEventsAudit
+    officialIdentity?: OfficialMidiIdentity
     referenceMidiBase64: string
     referenceConfig: SongConfig
     observedRange: { start: number; end: number }
@@ -480,11 +499,16 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     const assignment =
       challengeAssignmentRef.current ??
       ({
+        song,
         range: { start: fallbackStart, end: fallbackEnd },
         // This fallback only occurs if the user exits during countdown before
         // recording begins. It is never sent unless a valid MIDI take exists.
         config: JSON.parse(JSON.stringify(songConfig)) as SongConfig,
-      } satisfies { range: { start: number; end: number }; config: SongConfig })
+      } satisfies {
+        range: { start: number; end: number }
+        config: SongConfig
+        song: Song | undefined
+      })
     const assignedRange = assignment.range
     // Store reference.mid as precisely the score window this attempt observed.
     // It prevents a short, abandoned performance from being matched against a
@@ -493,8 +517,8 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       start: assignedRange.start,
       end: Math.min(Math.max(songTimeSec, assignedRange.start), assignedRange.end),
     }
-    const referenceMidiBase64 = song
-      ? bytesToBase64(referenceSnapshot(song, assignment.config, observedRange))
+    const referenceMidiBase64 = assignment.song
+      ? bytesToBase64(referenceSnapshot(assignment.song, assignment.config, observedRange))
       : ''
 
     setTerminalFlowInFlight(true)
@@ -516,6 +540,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       midiBytes: recording.midiBytes,
       performanceEvents: recording.performanceEvents,
       referenceMidiBase64,
+      officialIdentity: assignment.song?.officialIdentity,
       referenceConfig: assignment.config,
       observedRange,
       assignedRange,
@@ -549,6 +574,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
         midiBytes: terminal.midiBytes,
         performanceEvents: terminal.performanceEvents,
         referenceMidiBase64: terminal.referenceMidiBase64,
+        officialIdentity: terminal.officialIdentity,
         referenceConfig: terminal.referenceConfig,
         observedRange: terminal.observedRange,
         assignedRange: terminal.assignedRange,
@@ -822,7 +848,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
             <button
               className="flex h-9 items-center justify-center rounded-full bg-violet-600 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               onClick={handleTogglePlayingChallenge}
-              disabled={isFinalizing}
+              disabled={isFinalizing || !song}
             >
               {isFinalizing
                 ? 'Saving…'

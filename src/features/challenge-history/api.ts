@@ -152,11 +152,11 @@ export function isChallengeSuccess(accuracyPct: number): boolean {
 
 /**
  * 按歌曲聚合所有 challenge recording，
- * 计算每首歌曲的历史最高正确率。
+ * 计算每个片段（本地文件为歌曲）的历史最高正确率。
  *
  * Map key：
  *
- * `${song_source}/${song_id}`
+ * `${song_source}/${segment_id ?? song_id}`
  *
  * Map value：
  *
@@ -182,7 +182,7 @@ export function getBestAccuracyPerSong(rows: ChallengeRecordingRow[]): Map<
 
   for (const row of rows) {
     if (row.score_source !== 'aligned') continue
-    const key = `${row.song_source}/${row.song_id}`
+    const key = `${row.song_source}/${row.segment_id ?? row.song_id}`
     const accuracy = Number(row.accuracy_pct ?? 0)
     const existing = map.get(key)
 

@@ -49,7 +49,7 @@ def test_real_alignment_replay_and_quality(tmp_path):
     assert abs(r['diagnostics']['global_offset_sec']-0.5)<0.001
     assert all(event[0]==[] for event in r['events_data']['pitches'])
     assert len(stages)==1 and len(stages[0]['raw_matches'])==12
-    r.update(learner_key='synthetic',song_id='scale')
+    r.update(learner_key='synthetic',song_id='scale',segment_id='scale-part-2',segment_index=2,midi_sha256='a'*64)
     store=Objects(str(tmp_path/'raw')); tables=Tables(str(tmp_path/'lake'))
     key=f"alignment/{r['alignment_run_id']}/result.json"; store.json(key,r)
     assert catch_up(store,tables)==1
@@ -57,6 +57,8 @@ def test_real_alignment_replay_and_quality(tmp_path):
     assert catch_up(store,tables,True)==1
     assert len(tables.rows('gold/fact_midi_alignment'))==12
     assert len(tables.rows('gold/attempt_events'))==12
+    for name in ('gold/fact_midi_alignment','gold/attempt_events','gold/fact_alignment_attempt'):
+        assert all(row['segment_id']=='scale-part-2' and row['segment_index']==2 and row['midi_sha256']=='a'*64 for row in tables.rows(name))
     bad=json.loads(json.dumps(r)); bad['alignment_run_id']='bad'; bad['notes'][0]['reject_reason']=99
     store.json('alignment/bad/result.json',bad)
     with pytest.raises(RuntimeError): catch_up(store,tables)
@@ -67,7 +69,7 @@ def test_demo():
     from pianokt_backend.inference import DemoRecommender
     m=DemoRecommender()
     assert 'NOT-TRAINED' in m.version
-    r=m.recommend([],[],[dict(song_id='a',title='A',difficulty=0.3,genres=[])],1)
+    r=m.recommend([],[],[dict(song_id='a',segment_id='part',segment_index=1,title='A',difficulty=0.3,genres=[])],1)
     assert r[0]['predicted_accuracy'] is None
 
 def test_training_cutoff_and_mask(tmp_path):

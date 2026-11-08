@@ -1,3 +1,5 @@
+import type { OfficialMidiIdentity } from '@/types'
+
 /** Visit lifecycle and a durable, user-scoped event outbox. No route owns a visit. */
 export type Visit = {
   id: string
@@ -6,7 +8,7 @@ export type Visit = {
   sequence: number
   state: 'active' | 'pagehide' | 'signed_out'
 }
-export type AttemptContext = {
+export type AttemptContext = Partial<OfficialMidiIdentity> & {
   attempt_id: string
   visit_attempt_sequence: number
   song_id: string
@@ -99,10 +101,17 @@ export class ActivityTracker {
       `visit:${this.saved.visit.id}`,
     )
   }
-  begin(attemptId: string, songId: string, songSource: string, startedAt: string): AttemptContext {
+  begin(
+    attemptId: string,
+    songId: string,
+    songSource: string,
+    startedAt: string,
+    identity?: OfficialMidiIdentity,
+  ): AttemptContext {
     if (this.saved.active) this.interrupt('new_attempt')
     this.saved.attemptCount += 1
     const context = {
+      ...identity,
       attempt_id: attemptId,
       visit_attempt_sequence: this.saved.attemptCount,
       song_id: songId,

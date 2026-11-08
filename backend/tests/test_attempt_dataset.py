@@ -14,13 +14,14 @@ def fixture(tmp_path):
                   timing_offset_ms=[[[0],[0]],[[],[None]]], pitch_offset_semitones=[[[0],[0]],[[],[None]]], extra_notes=[[],[]])
     def attempt(aid, vid, start, seq):
         return dict(source_environment='production',attempt_id=aid,visit_id=vid,visit_attempt_sequence=seq,user_id='private-auth-id',learner_key='learner',
-                    song_id='song',song_source='builtin', started_at=start,ended_at='2026-01-02T01:01:00Z',
+                    song_id='70000000-0000-0000-0000-000000000001',segment_id='80000000-0000-0000-0000-000000000001',segment_index=1,midi_sha256='a'*64,song_source='builtin', started_at=start,ended_at='2026-01-02T01:01:00Z',
                     registered_at='2025-01-01T00:00:00Z',time_playing=1,is_played_in_full=False,exit_status='abandoned')
     context = dict(visits=[dict(source_environment='production',id='v2',user_id='private-auth-id',learner_key='learner',started_at='2026-01-02T01:00:00Z'),
                            dict(source_environment='production',id='v1',user_id='private-auth-id',learner_key='learner',started_at='2026-01-02T08:00:00+08:00')],
                    attempts=[attempt('a3','v2','2026-01-02T01:00:00Z',1),attempt('a2','v1','2026-01-02T08:02:00+08:00',2),attempt('a1','v1','2026-01-02T08:01:00+08:00',1)], events=[])
     for aid in ('a1','a2','a3'):
         store.json(f'alignment/{aid}/result.json', dict(source_environment='production',attempt_id=aid,alignment_run_id=aid,learner_key='learner',score_version='score',
+            song_id='70000000-0000-0000-0000-000000000001',segment_id='80000000-0000-0000-0000-000000000001',segment_index=1,midi_sha256='a'*64,
             alignment_completed_at='2026-01-02T02:00:00Z', alignment_quality_valid=aid!='a2',events_data=events))
     tables = SimpleNamespace(rows=lambda _: [{'event_id':a} for a in ('a1','a2','a3','duplicate')])
     return store, tables, context
@@ -144,3 +145,26 @@ def test_actual_kc_version_propagates_or_mixed_export_fails(tmp_path, mixed):
         training = json.loads(store.read('datasets/train.json'))
         assert training['kc_labeler_version'] == '1.2.0'
         assert 'feature_version' not in training and 'feature_version' not in manifest
+
+
+def test_exercise_identity_includes_original_midi_hash_segment_and_tracks(tmp_path):
+    from pianokt_backend.pipeline.attempts import build_record
+    store, _, context = fixture(tmp_path)
+    result = json.loads(store.read('alignment/a1/result.json'))
+    attempt = {**context['attempts'][0], 'midi_sha256': 'a'*64, 'segment_id': 'segment-one'}
+    first = build_record(result, attempt, 1, 1)
+    assert first['exercise_id'] != build_record(result, {**attempt, 'midi_sha256': 'b'*64}, 1, 1)['exercise_id']
+    result.setdefault('practice_metadata', {}).setdefault('settings', {})['tracks'] = {'0': {'hand': 'left'}}
+    assert first['exercise_id'] != build_record(result, attempt, 1, 1)['exercise_id']
+
+
+def test_exercise_identity_includes_segment_even_with_same_bytes(tmp_path):
+    from pianokt_backend.pipeline.attempts import build_record
+    store, _, context = fixture(tmp_path)
+    result = json.loads(store.read('alignment/a1/result.json'))
+    attempt = {**context['attempts'][0], 'midi_sha256': 'a'*64, 'segment_id': 'segment-one'}
+    first = build_record(result, attempt, 1, 1)
+    second = build_record(result, {**attempt, 'segment_id': 'segment-two'}, 1, 1)
+    assert first['exercise_id'] != second['exercise_id']
+    assert first['midi_sha256'] == 'a'*64
+    assert first['segment_id'] == 'segment-one'

@@ -62,7 +62,7 @@ const context = vm.createContext({
 vm.runInContext(compile('src/features/challenge-history/gcs.ts'), context)
 const activity = {
   owner_id: 'owner',
-  attempt: { attempt_id: 'attempt' },
+  attempt: { attempt_id: 'attempt', visit_attempt_sequence: 1, started_at: '2026-11-08T02:51:30Z', song_id: 'song', song_source: 'builtin' },
   visit: { id: 'visit' },
   events: [{ event_sequence: 0, elapsed_playing_sec: 0.12345678901234567 }],
 }
@@ -71,6 +71,9 @@ const result = await context.uploadSealedRecording(
     schemaVersion: 2,
     songSource: 'builtin',
     songId: 'song',
+    segmentId: 'baf30fbc-7553-43d4-b1bf-aa03391158c7',
+    segmentIndex: 2,
+    midiSha256: 'a'.repeat(64),
     songTitle: null,
     durationSec: 1,
     midiBase64: 'TQ==',
@@ -85,12 +88,22 @@ assert.equal(result.id, 'attempt')
 assert.equal(maxActivePuts, 3)
 const create = JSON.parse(requests.find((r) => r.url.endsWith('/attempts')).options.body)
 assert.equal(create.schema_version, 2)
+assert.equal(create.midi_sha256, 'a'.repeat(64))
+assert.equal(create.segment_id, 'baf30fbc-7553-43d4-b1bf-aa03391158c7')
+assert.equal(create.segment_index, 2)
+assert.equal('song_version_id' in create, false)
 assert.equal(create.attempt_id, 'attempt')
 assert.equal('activity' in create, false)
 assert.equal('session_id' in create, false)
 assert.equal(requests.filter((r) => r.options.method === 'PUT').length, 3)
 const final = JSON.parse(requests.at(-1).options.body)
-assert.deepEqual(final, { schema_version: 3, activity })
+assert.deepEqual(final, { schema_version: 3, activity: { ...activity, attempt: {
+  attempt_id: activity.attempt.attempt_id,
+  visit_attempt_sequence: activity.attempt.visit_attempt_sequence,
+  started_at: activity.attempt.started_at,
+} } })
+assert.equal('song_id' in final.activity.attempt, false)
+assert.equal('midi_sha256' in final.activity.attempt, false)
 assert.equal(requests.at(-1).url, 'https://api.test/attempts/attempt/finalize')
 
 const lab = vm.createContext({
@@ -144,6 +157,7 @@ context.fetch = async (url, options) => {
 }
 const failed = await context.uploadSealedRecording({
   schemaVersion: 2, songSource: 'builtin', songId: 'song', songTitle: null,
+  segmentId: 'baf30fbc-7553-43d4-b1bf-aa03391158c7', segmentIndex: 2, midiSha256: 'a'.repeat(64),
   durationSec: 1, midiBase64: 'TQ==', referenceMidiBase64: 'Ug==', activity,
 }, 'owner', 'attempt')
 assert.match(failed.error, /500/)
@@ -183,8 +197,11 @@ context.fetch = async (url, options) => {
 }
 const repair = await context.uploadSealedRecording({
   schemaVersion: 2, songSource: 'builtin', songId: 'song', songTitle: null,
+  segmentId: 'baf30fbc-7553-43d4-b1bf-aa03391158c7', segmentIndex: 2, midiSha256: 'a'.repeat(64),
   durationSec: 1, midiBase64: 'TQ==', referenceMidiBase64: 'Ug==', activity,
 }, 'owner', 'attempt')
 assert.equal(repairedPuts, 2)
 assert.equal(repair.validated, false)
 console.log('PASS: missing files can be repaired without deleting recovery bytes.')
+
+console.log('PASS: Finalize references the attempt without retransmitting song identity.')

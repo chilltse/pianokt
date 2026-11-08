@@ -2,6 +2,9 @@ export type ChallengeRecordingRow = {
   id: string
   user_id: string
   song_source: string
+  segment_id?: string
+  segment_index?: number
+  midi_sha256?: string
   song_id: string
   song_title: string | null
   duration_sec: number
@@ -51,6 +54,9 @@ export type UserPlayLogRow = {
   session_id: string
   user_id: string
   song_id: string
+  segment_id: string | null
+  segment_index: number | null
+  midi_sha256: string | null
   exercise_id: string | null
   play_mode: PlayMode
   days_since_signup: number | null

@@ -23,6 +23,9 @@ def _floats(*names: str) -> list[tuple[str, pa.DataType]]:
     return [(name, pa.float64()) for name in names]
 
 
+# Catalog segments are musical pieces, distinct from pause/resume transport segments.
+SONG_CONTENT_FIELDS = [('segment_id', pa.string()), ('segment_index', pa.int32()), ('midi_sha256', pa.string())]
+
 ENVELOPE_SCHEMA = pa.schema(
     _strings('event_id', 'event_type', 'source_key', 'payload_json')
 )
@@ -50,6 +53,7 @@ BRONZE_MIDI_EVENT_SCHEMA = pa.schema(
         'performance_now_timestamp_ms',
     )
     + [('pitch', pa.int32()), ('velocity', pa.int32()), ('sequence', pa.int64())]
+    + SONG_CONTENT_FIELDS
 )
 
 # Segments make pause/resume boundaries auditable without interpreting elapsed
@@ -76,6 +80,7 @@ BRONZE_TRANSPORT_SEGMENT_SCHEMA = pa.schema(
         'end_performance_now_timestamp_ms',
     )
     + [('sequence', pa.int64())]
+    + SONG_CONTENT_FIELDS
 )
 
 _ALIGNMENT_EVENT_STRING_FIELDS = _strings(
@@ -136,6 +141,7 @@ SILVER_ALIGNMENT_EVENT_SCHEMA = pa.schema(
     + _ALIGNMENT_EVENT_FLOAT_FIELDS
     + _ALIGNMENT_EVENT_TAIL_FIELDS
     + _strings('source_key', 'payload_json')
+    + SONG_CONTENT_FIELDS
 )
 
 # One row per alignment event; deliberately no payload_json.
@@ -143,6 +149,7 @@ GOLD_ALIGNMENT_EVENT_SCHEMA = pa.schema(
     _ALIGNMENT_EVENT_STRING_FIELDS
     + _ALIGNMENT_EVENT_FLOAT_FIELDS
     + _ALIGNMENT_EVENT_TAIL_FIELDS
+    + SONG_CONTENT_FIELDS
 )
 
 # Backwards-compatible alias for consumers that imported the old name. New
@@ -157,6 +164,7 @@ ATTEMPT_EVENT_SCHEMA = pa.schema(
        ('kc_vector_json', pa.string()), ('reject_reason_event', pa.int32()),
        ('reject_reason_note_json', pa.string()), ('timing_offset_ms_json', pa.string()),
        ('pitch_offset_semitones_json', pa.string()), ('extra_notes', pa.list_(pa.int32()))]
+    + SONG_CONTENT_FIELDS
 )
 
 # The old serving table is intentionally retained while downstream readers are
@@ -177,6 +185,7 @@ LEGACY_SUMMARY_SCHEMA = pa.schema(
         ('missing_notes', pa.int64()),
     ]
     + [('accuracy', pa.float64()), ('timing_labels_valid', pa.bool_())]
+    + SONG_CONTENT_FIELDS
 )
 SUMMARY_SCHEMA = LEGACY_SUMMARY_SCHEMA
 
@@ -215,6 +224,7 @@ ALIGNMENT_ATTEMPT_SCHEMA = pa.schema(
         ('observed_end_sec', pa.float64()),
     ]
     + [('timing_labels_valid', pa.bool_()), ('alignment_quality_valid', pa.bool_())]
+    + SONG_CONTENT_FIELDS
 )
 
 

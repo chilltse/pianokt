@@ -1,6 +1,7 @@
 import json
 from .selection import utc, eligible_results, rejection, select_one, attempt_order_key
 from ..contracts import stable_id
+from ..song_identity import assert_export_identity
 from .attempts import filter_context
 from ..provenance import export_environment
 from .kc_versions import result_kc_version, dataset_kc_version
@@ -18,6 +19,7 @@ def export_dataset(objects,tables,cutoff,output_key, context=None, run_selection
             if a is None or utc(a['started_at'])>=boundary or utc(a.get('received_at',a['started_at']))>=boundary: continue
             if not a.get('ended_at') or utc(a['ended_at'])>=boundary: continue
             if str(a['learner_key'])!=str(r['learner_key']): raise ValueError('Learner context mismatch')
+            assert_export_identity(r,a)
         started=(a or {}).get('started_at') or r.get('attempt_started_at') or r.get('attempt_created_at')
         if not started or utc(started)>=boundary: continue
         select_one(selected,r)
@@ -27,10 +29,10 @@ def export_dataset(objects,tables,cutoff,output_key, context=None, run_selection
         if not isinstance(onsets,list) or not isinstance(labels,list) or len(onsets)!=len(labels):
             raise ValueError('Invalid v1.1 attempt events')
         for i,(onset,reason) in enumerate(zip(onsets,labels)):
-            examples.append(dict(learner_key=r['learner_key'],attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],event_index=i,onset_seconds=onset,pitches=data['pitches'][i],kc_vector=data['kc_vectors'][i],correct=1-int(reason),reject_reason=reason,ordering_timestamp=utc(started).isoformat(),ordering_source='started_at' if a or r.get('attempt_started_at') else 'legacy_upload_time'))
+            examples.append(dict(learner_key=r['learner_key'],attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],song_id=r.get('song_id'),segment_id=r.get('segment_id'),segment_index=r.get('segment_index'),midi_sha256=r.get('midi_sha256'),event_index=i,onset_seconds=onset,pitches=data['pitches'][i],kc_vector=data['kc_vectors'][i],correct=1-int(reason),reject_reason=reason,ordering_timestamp=utc(started).isoformat(),ordering_source='started_at' if a or r.get('attempt_started_at') else 'legacy_upload_time'))
     examples.sort(key=lambda e: (attempt_order_key(by_id[e['attempt_id']]) if e['attempt_id'] in by_id else (str(e['learner_key']),utc(e['ordering_timestamp']),'',0,e['attempt_id']))+(e['onset_seconds'],e['event_index']))
     provenance=[dict(attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],
-                     matcher_version=r.get('matcher_version'),kc_labeler_version=result_kc_version(r),result_digest=r.get('_committed_digest'))
+                     song_id=r.get('song_id'),segment_id=r.get('segment_id'),segment_index=r.get('segment_index'),midi_sha256=r.get('midi_sha256'),matcher_version=r.get('matcher_version'),kc_labeler_version=result_kc_version(r),result_digest=r.get('_committed_digest'))
                 for r in sorted(selected.values(),key=lambda r:r['attempt_id'])]
     payload=dict(source_environment=environment,source='postgres-ready-v1' if hasattr(tables,'results') else 'lake-completed-v1',
                  kc_labeler_version=dataset_kc_version(selected.values()),quality_policy='quality-valid-and-not-waiting',runs=provenance,dataset_version=stable_id(cutoff,environment,examples,provenance,dataset_kc_version(selected.values())),cutoff=utc(cutoff).isoformat(),examples=examples,warning='Split students/time before windowing. No trained model is included.')

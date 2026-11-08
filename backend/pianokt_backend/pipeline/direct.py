@@ -10,7 +10,7 @@ def read_committed(connection, cutoff, environment='production'):
     """Called alongside read_context in one short repeatable-read transaction."""
     rows = connection.execute("""
         select id as attempt_id, learner_key, alignment_run_id, result_key,
-               reference_hash, performance_hash, result_digest,
+               reference_hash, performance_hash, result_digest,song_id,segment_id,segment_index,midi_sha256,
                result_committed_at, summary, source_environment
         from public.piano_attempts
         where status='READY' and source_environment=%s and
@@ -51,6 +51,8 @@ class CommittedResults:
                             alignment_run_id=row['alignment_run_id'],
                             score_version=row['reference_hash'],
                             performance_hash=row['performance_hash'], schema_version=3, source_environment=environment)
+            expected.update({key: str(row[key]) if key == 'segment_id' and row[key] is not None else row[key]
+                             for key in ('song_id','segment_id','segment_index','midi_sha256') if key in row})
             if any(result.get(k) != v for k, v in expected.items()):
                 raise ValueError(f'Committed result identity/schema mismatch: {aid}')
             if result.get('summary') != row['summary']:

@@ -3,6 +3,7 @@ import json
 from collections import defaultdict
 from datetime import datetime, timezone
 from ..contracts import stable_id
+from ..song_identity import exercise_identity, assert_export_identity
 from ..provenance import export_environment
 from .kc_versions import result_kc_version, dataset_kc_version
 
@@ -115,10 +116,11 @@ def build_record(result, context, visit_index, attempt_index):
     # Reference snapshots are cropped to the observed range: their hash changes
     # when the same assigned exercise is abandoned earlier. Keep that hash in
     # index_map, not in the exercise identity.
-    exercise_id = 'exercise-' + stable_id(context['song_source'], context['song_id'],
-        {k: settings.get(k) for k in ('assigned_range', 'left', 'right', 'transpose', 'waiting')})
+    exercise_id = exercise_identity(context['song_source'],context['song_id'],context.get('segment_id'),context.get('midi_sha256'),settings)
     return dict(
-        user_id=str(context['learner_key']), song_id=context['song_id'], exercise_id=exercise_id,
+        user_id=str(context['learner_key']), song_id=context['song_id'],
+        segment_id=context.get('segment_id'), segment_index=context.get('segment_index'),
+        midi_sha256=context.get('midi_sha256'), exercise_id=exercise_id,
         days_since_signup=round(days, 6), song_type=context['song_source'],
         visit_index=visit_index, attempt_index=attempt_index, play_mode='challenge',
         chords_evaluated=sum(n >= 2 for n in counts),
@@ -154,6 +156,7 @@ def export_attempts(objects, tables, cutoff, output_prefix, context, run_selecti
         if a is None or str(a['visit_id']) not in visit_indices:
             skipped['missing_context'] += 1; continue
         if str(r.get('learner_key')) != str(a['learner_key']): raise ValueError('Learner context mismatch')
+        assert_export_identity(r,a)
         reason=rejection(r)
         if reason:
             skipped[reason] += 1; continue
@@ -168,7 +171,7 @@ def export_attempts(objects, tables, cutoff, output_prefix, context, run_selecti
         vi, ai = visit_indices[str(a['visit_id'])], attempt_indices[aid]
         records.append(build_record(r, a, vi, ai))
         mappings.append(dict(user_id=str(a['learner_key']), visit_index=vi, attempt_index=ai,
-                             attempt_id=aid, visit_id=str(a['visit_id']), alignment_run_id=r['alignment_run_id'], score_version=r['score_version'],
+                             midi_sha256=a.get('midi_sha256'), segment_id=a.get('segment_id'), segment_index=a.get('segment_index'), attempt_id=aid, visit_id=str(a['visit_id']), alignment_run_id=r['alignment_run_id'], score_version=r['score_version'],
                              matcher_version=r.get('matcher_version'), kc_labeler_version=result_kc_version(r),
                              result_digest=r.get('_committed_digest')))
     # No auth user IDs leave the context snapshot. Timestamps remain separate.

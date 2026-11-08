@@ -97,6 +97,9 @@ def _is_current_result(result,row,config,expected_run,observed_end_sec,reference
     return (
         result.get('attempt_id')==str(row['id'])
         and result.get('alignment_run_id')==expected_run
+        and result.get('song_id')==row.get('song_id')
+        and all(str(result.get(key))==str((row.get('metadata') or {}).get(key))
+                for key in ('segment_id','segment_index','midi_sha256'))
         and result.get('score_version')==row['reference_hash']
         and result.get('performance_hash')==row['performance_hash']
         and result.get('matcher_version')==matcher_version()
@@ -194,7 +197,6 @@ def process(attempt_id):
                 attach_attempt_context(result, attempt_context(row))
                 result.update(
                 learner_key=str(row['learner_key']),
-                song_id=row['song_id'],
                 session_id=str(row['id']),
                 source_environment=row.get('source_environment','unknown'),
                 practice_metadata=row['metadata'],

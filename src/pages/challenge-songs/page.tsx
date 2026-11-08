@@ -7,8 +7,8 @@ import {
 } from '@/features/challenge-history'
 import { useSongManifest } from '@/features/data/library'
 import { SongPreviewModal } from '@/features/SongPreview'
-import { getKey } from '@/utils'
 import type { SongMetadata, SongSource } from '@/types'
+import { getKey } from '@/utils'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router'
 
@@ -30,7 +30,9 @@ export default function ChallengeSongsPage() {
 
   const songMap = useMemo(() => {
     const m = new Map<string, SongMetadata>()
-    songs.forEach((s) => m.set(getKey(s.id, s.source), s))
+    songs.forEach((s) => {
+      m.set(getKey(s.id, s.source), s)
+    })
     return m
   }, [songs])
 
@@ -71,7 +73,7 @@ export default function ChallengeSongsPage() {
     return (
       <>
         <AppBar />
-        <div className="flex min-h-screen items-center justify-center bg-paper bg-amber-50/70">
+        <div className="bg-paper flex min-h-screen items-center justify-center bg-amber-50/70">
           <p className="text-gray-500">Loading…</p>
         </div>
       </>
@@ -91,7 +93,7 @@ export default function ChallengeSongsPage() {
         onClose={() => setSelectedForPreview(null)}
         mode="challenge"
       />
-      <div className="flex min-h-screen flex-col bg-paper bg-amber-50/70">
+      <div className="bg-paper flex min-h-screen flex-col bg-amber-50/70">
         <AppBar />
         <div className="mx-auto flex min-h-0 w-full max-w-(--breakpoint-lg) flex-1 flex-col p-6">
           <div className="flex flex-wrap items-center justify-between gap-6">
@@ -157,7 +159,7 @@ export default function ChallengeSongsPage() {
                         <td className="truncate px-4 py-2.5 font-medium text-gray-900">
                           {r.title}
                         </td>
-                        <td className="px-4 py-2.5 text-right tabular-nums text-gray-600">
+                        <td className="px-4 py-2.5 text-right text-gray-600 tabular-nums">
                           {r.bestAccuracy.toFixed(1)}%
                         </td>
                         <td className="px-4 py-2.5 text-right">
@@ -212,7 +214,7 @@ export default function ChallengeSongsPage() {
                         <td className="truncate px-4 py-2.5 font-medium text-gray-900">
                           {s.title}
                         </td>
-                        <td className="px-4 py-2.5 text-right tabular-nums text-gray-500">
+                        <td className="px-4 py-2.5 text-right text-gray-500 tabular-nums">
                           {formatTime(Number(s.duration))}
                         </td>
                       </tr>

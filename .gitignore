@@ -42,3 +42,7 @@ backend/.env
 terraform.tfvars
 
 .lockb-*.tmp
+
+# Application data modules are source code, not local lake output.
+!src/features/data/
+!src/features/data/**

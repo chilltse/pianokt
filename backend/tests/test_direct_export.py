@@ -68,3 +68,11 @@ def test_direct_integrity_failures_never_publish(tmp_path,failure):
     with pytest.raises((ValueError,FileNotFoundError)):
         export_attempts(store,CommittedResults(rows),CUTOFF,'datasets/fail',context,selection)
     assert store.keys('datasets') == []
+
+
+def test_direct_rejects_wrong_catalog_content_before_publication(tmp_path):
+    store, _, context, rows = setup(tmp_path)
+    row=rows[0]
+    row.update(song_id=context['attempts'][0]['song_id'],segment_id='different-segment',segment_index=1,midi_sha256='a'*64)
+    with pytest.raises(ValueError,match='identity/schema mismatch'):
+        export_attempts(store,CommittedResults(rows),CUTOFF,'datasets/wrong-content',context)

@@ -1,5 +1,5 @@
 /**
- * Generates trimmed MuseScore `--score-meta` fixtures for MIDI files in public/music/songs.
+ * Generates trimmed MuseScore `--score-meta` fixtures for MIDI files in scripts/song_catalog/midi.
  *
  * Usage:
  *   bun scripts/generate-score-meta.ts
@@ -9,7 +9,7 @@ import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 const MSCORE_PATH = '/Applications/MuseScore 4.app/Contents/MacOS/mscore'
-const SONGS_DIR = path.join(process.cwd(), 'public/music/songs')
+const SONGS_DIR = path.join(process.cwd(), 'scripts/song_catalog/midi')
 const FIXTURE_DIR = path.join(process.cwd(), 'tests/mscore-meta')
 
 type ScoreMeta = {

@@ -1,6 +1,7 @@
 import { AppBar, MarketingFooter, Modal, Sizer } from '@/components'
-import { useSongManifest } from '@/features/data/library'
 import { useOptionalAuth } from '@/features/auth'
+import { useCatalogStatus, useSongManifest } from '@/features/data/library'
+import { prefetchSongs } from '@/features/data/prefetch'
 import { isInitializedAtom } from '@/features/persist/persistence'
 import { SongPreviewModal } from '@/features/SongPreview'
 import { useEventListener } from '@/hooks'
@@ -17,6 +18,7 @@ import { TableSkeleton } from './components/Table/Table'
 
 // TODO: after an upload, scroll to the newly uploaded song / make it focused.
 export default function SelectSongPage() {
+  const catalogStatus = useCatalogStatus()
   let songs: SongMetadata[] = useSongManifest()
   const isInitialized = useAtomValue(isInitializedAtom)
   useOptionalAuth()
@@ -24,6 +26,13 @@ export default function SelectSongPage() {
   const [selectedSongId, setSelectedSongId] = useState<any>('')
   const selectedSongMeta = songs.find((s) => s.id === selectedSongId)
   const [search, setSearch] = useState('')
+  const [prefetch, setPrefetch] = useState(false)
+  React.useEffect(() => {
+    if (!prefetch || !catalogStatus.data) return
+    const controller = new AbortController()
+    prefetchSongs(catalogStatus.data, controller.signal)
+    return () => controller.abort()
+  }, [prefetch, catalogStatus.data])
 
   useEventListener<KeyboardEvent>('keydown', (event) => {
     if (event.key === 'Escape') {
@@ -53,7 +62,7 @@ export default function SelectSongPage() {
       <Modal show={isUploadFormOpen} onClose={handleCloseAddNew} className="w-[min(100vw,500px)]">
         <ManageFoldersForm onClose={handleCloseAddNew} />
       </Modal>
-      <div className="flex h-screen w-full flex-col overflow-hidden bg-paper bg-amber-50/70">
+      <div className="bg-paper flex h-screen w-full flex-col overflow-hidden bg-amber-50/70">
         <div className="shrink-0">
           <AppBar />
         </div>
@@ -81,13 +90,24 @@ export default function SelectSongPage() {
               <ChevronDown width={16} height={16} />
             </button>
           </div>
+          <label className="text-sm">
+            <input
+              type="checkbox"
+              checked={prefetch}
+              onChange={(e) => setPrefetch(e.target.checked)}
+            />{' '}
+            空闲时缓存官方 MIDI
+          </label>
           <Sizer height={20} />
+          {catalogStatus.error && (
+            <p role="status">
+              曲库暂时无法同步，已缓存曲目仍可使用。
+              <button onClick={() => void catalogStatus.mutate()}>重试</button>
+            </p>
+          )}
+          {catalogStatus.isLoading && !songs.length && <p role="status">正在加载曲库…</p>}
           {isInitialized ? (
-            <Table
-              rows={songs}
-              search={search}
-              onSelectRow={setSelectedSongId}
-            />
+            <Table rows={songs} search={search} onSelectRow={setSelectedSongId} />
           ) : (
             <TableSkeleton />
           )}

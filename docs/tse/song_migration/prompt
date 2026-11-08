@@ -1,0 +1,434 @@
+# PianoKT 曲库迁移与本地缓存重构
+
+## 一、总体目标
+
+将 PianoKT 的官方 MIDI 曲库从 React 前端静态资源迁移到 Supabase，完成统一曲目管理和浏览器本地持久缓存。
+
+最终架构：
+
+- Supabase PostgreSQL：保存曲目元数据、曲目 ID、版本 ID、SHA-256、文件路径、版权、难度等。
+- Supabase Storage：保存官方原始 MIDI 文件。
+- IndexedDB：保存用户已经下载过的 MIDI 二进制数据。
+- React：从 Supabase 获取曲目列表；打开曲目时优先从 IndexedDB 读取 MIDI。
+- GCS：保持现有 Challenge 上传、reference.mid、performance.mid、Alignment 和数据管道，不迁移这些功能。
+
+**重构完成后，前端工程不再保存任何官方 MIDI 曲目文件，也不再依赖静态 `src/manifest.json` 维护官方曲库。**
+
+## 二、先检查当前代码
+
+重点调查：
+
+- `public/music/songs/`
+- `src/manifest.json`
+- `src/features/data/index.tsx`
+- `src/features/data/library.tsx`
+- `src/features/persist/`
+- `src/pages/songs/`
+- `src/pages/challenge/`
+- `src/pages/challenge-songs/`
+- `src/features/SongPreview/`
+- `src/features/challenge-history/`
+- `src/types.ts`
+- `supabase/migrations/`
+- `supabase/seed_demo_catalog.sql`
+- `backend/pianokt_backend/api.py`
+- `backend/pianokt_backend/pipeline/attempts.py`
+- `scripts/` 下所有读取静态曲库的工具
+
+搜索全部 `song_id`、`song_source`、`song_version_id`、`manifest.json`、`/music/songs/` 和 `piano_song_catalog` 的引用。
+
+先理解现有数据流及兼容约束，然后直接修改代码。
+
+不要重复实现项目已有的功能。
+
+## 三、Supabase 数据结构
+
+当前数据库已经有 `piano_song_catalog`，不要盲目删除或重新创建。
+
+使用新的、可重复安全执行的 SQL Migration，逐步升级现有数据结构。
+
+### 1. 曲目表
+
+每一首独立的可演奏编曲应有稳定的 UUID 身份。
+
+需要支持：
+
+- `song_id`：稳定的 UUID。
+- `slug`：人类可读的曲目名称标识。
+- `title`：曲目名称。
+- `composer`：作曲家。
+- `difficulty`：难度。
+- `genres`：分类。
+- `license`：版权许可。
+- `source_url`：来源链接。
+- `status`：draft/published/archived。
+- `active_version_id`：当前使用的版本。
+- 创建及更新时间。
+
+如果现有 `song_id` 已用于历史记录，必须保留向后兼容性。可以通过新增 UUID 字段、映射表或分阶段迁移实现，不允许直接破坏历史 Attempt、Challenge Recordings 和推荐数据。
+
+### 2. 曲目版本表
+
+新增 `piano_song_versions`，建议包含：
+
+- `id`：UUID 主键。
+- `song_id`：关联曲目。
+- `version_number`：版本序号。
+- `midi_sha256`：原始 MIDI 的 SHA-256。
+- `storage_path`：Supabase Storage 对象路径。
+- `duration_ms`：时长。
+- `note_count`：音符数量。
+- `created_at`：创建时间。
+
+曲目文件发生变化时创建新版本，不允许覆盖旧版本。
+
+UUID 用于稳定的业务身份，SHA-256 用于验证文件内容和浏览器缓存，二者不能混用。
+
+注意区分：
+
+- `song_id`：逻辑曲目。
+- `song_version_id`：原始曲谱版本。
+- `midi_sha256`：原始 MIDI 文件字节哈希。
+- `reference_hash`：一次 Challenge 生成的参考快照哈希。
+
+现有 Alignment 的 `score_version` 实际表示 reference snapshot 的哈希，不要将其误认为原始歌曲版本。
+
+### 3. 一次查询获取完整曲目目录
+
+实现一个面向前端的公开曲目目录查询接口，可以是 Postgres View 或 Supabase 查询。
+
+要求：
+
+- 前端一次 Supabase 请求获取全部已发布曲目元数据及当前 MIDI 版本。
+- 不使用 N+1 查询。
+- 不需要为每首歌分别请求数据库。
+- 包含 `song_id`、`song_version_id`、`midi_sha256`、`storage_path`、`title`、`difficulty`、`duration` 等前端必要字段。
+- 不返回 MIDI 二进制。
+- 不暴露私有曲目、管理员信息及敏感字段。
+
+设计适当的索引和 RLS 权限。公开目录允许匿名读取；客户端不能任意修改官方曲目或发布曲目版本。
+
+## 四、Supabase Storage
+
+创建用于官方 MIDI 的 Storage Bucket，例如：
+
+`piano-midi`
+
+官方公开曲目使用 Public Bucket；如果以后有用户私有曲目，必须使用单独的 Private Bucket，不能把所有用户上传文件公开。
+
+文件使用 SHA-256 作为对象名：
+
+`midi/<sha256>.mid`
+
+要求：
+
+1. 计算上传 MIDI 原始字节的 SHA-256。
+2. 验证 MIDI 格式、大小与基本可解析性。
+3. 防止重复上传和意外覆盖。
+4. 配置适当的 Cache-Control。
+5. 在数据库中记录文件哈希和 Storage 路径。
+6. 保证数据库曲目记录只指向已成功上传且验证的文件。
+7. 公开 MIDI 通过 Supabase Storage CDN 直接下载，不要让 Cloud Run API 代理 MIDI 字节。
+
+服务端凭据、service role key 只能用于安全的管理员导入流程，绝不进入浏览器 Bundle。
+
+## 五、迁移现有所有官方 MIDI
+
+将当前：
+
+`public/music/songs/*.mid`
+
+迁移到 Supabase Storage。
+
+原始元数据来自：
+
+`src/manifest.json`
+
+包括曲名、作者、时长、来源 URL 和 License。
+
+编写管理员导入脚本，例如：
+
+`python scripts/import_song_catalog.py`
+
+或者项目中更合理的命令行实现。
+
+脚本应支持：
+
+- 批量导入所有现有 MIDI。
+- 根据文件字节计算 SHA-256。
+- 解析 MIDI 的真实时长、音符数量。
+- 保留元数据和版权信息。
+- 生成稳定的曲目 UUID。
+- 建立旧文件名 ID 到新 UUID 的映射。
+- 重复执行不产生重复记录或文件。
+- 明确报告导入成功、失败和冲突。
+- 校验数据库文件版本与 Storage 对象一致。
+
+务必检查现有文件的版权与许可信息，不要凭空改写。
+
+**先确保所有文件完成迁移、可下载、SHA 一致，再删除前端静态曲库。**
+
+最后移除：
+
+- `public/music/songs/` 下的官方 MIDI。
+- 原来作为官方曲库数据源的 `src/manifest.json`。
+- 所有不再需要的静态曲库路径和构建逻辑。
+
+检查是否还有生成脚本或测试依赖该目录，并一并调整。
+
+不要删除无关的 soundfonts、effects 等音频资源。
+
+## 六、React 曲目列表
+
+修改现有 `useSongManifest()` 和相关逻辑，让官方曲目来自 Supabase，而不是本地静态 JSON。
+
+期望流程：
+
+用户进入 `/songs`：
+
+1. 检查 IndexedDB 中是否有上次成功缓存的曲目目录。
+2. 如果有，立即展示缓存目录。
+3. 后台执行一次 Supabase 目录查询。
+4. 查询成功后更新 UI 和本地目录缓存。
+5. 查询失败时保留已经缓存的目录，显示非阻塞的网络状态。
+6. 首次没有缓存且查询失败时显示正常的错误和重试按钮。
+
+要求：
+
+- 曲目列表请求去重，不因为多个组件订阅而重复查询。
+- 不因每次组件重渲染重新请求 Supabase。
+- 保留现有搜索、预览、Challenge、Recommended Songs 等功能。
+- 不影响浏览器中用户自行添加的本地 MIDI 文件。
+- 正确区分官方曲库和本地曲库。
+- 不以歌曲标题或文件名作为业务主键。
+
+可以使用现有 SWR/Jotai 机制，不要额外引入大型状态管理库。
+
+## 七、最重要：IndexedDB MIDI 本地缓存
+
+实现独立模块：
+
+`src/features/data/midiCache.ts`
+
+或符合项目结构的等效位置。
+
+缓存键：
+
+`midi:<midi_sha256>`
+
+缓存内容：
+
+原始 MIDI 二进制 `ArrayBuffer`。
+
+不要通过 Base64 保存 MIDI。
+
+### 加载顺序
+
+用户点击歌曲时：
+
+1. 根据曲目元数据取得 `song_version_id` 和 `midi_sha256`。
+2. 首先检查 IndexedDB。
+3. 如果存在对应 SHA 的 MIDI，立即返回缓存数据。
+4. 如果没有，才从 Supabase Storage 下载。
+5. 下载成功后计算 SHA-256。
+6. 与数据库记录的 `midi_sha256` 比较。
+7. 一致则写入 IndexedDB。
+8. 返回 MIDI 数据并使用现有 `parseMidi()` 解析。
+9. 哈希不一致必须报错，不缓存损坏数据。
+
+必须处理：
+
+- 下载失败。
+- 本地缓存不可用。
+- IndexedDB 写入失败。
+- 浏览器存储空间不足。
+- 同一 MIDI 的并发下载去重。
+- 组件卸载或取消请求。
+- 同一个 SHA 被多个曲目引用。
+- MIDI 更新为新版本后的缓存失效问题。
+
+IndexedDB 写入失败不能阻止当前已经下载成功的 MIDI 被演奏。
+
+不要每次命中本地缓存都再做网络请求。
+
+### SWR 缓存
+
+当前 `useSong()` 使用 `[id, source]` 作为缓存键。
+
+修改为能够识别曲目版本或 MIDI SHA 的键，例如：
+
+`[source, song_id, song_version_id]`
+
+确保：
+
+- 相同版本可以复用缓存。
+- 更新曲目后不会错误使用旧 MIDI。
+- 浏览器刷新后可以继续通过 IndexedDB 获取 MIDI。
+- 不影响 `source=local` 和其他现有来源。
+
+## 八、用户体验
+
+实现以下明确的用户体验：
+
+### 第一次打开曲库
+
+- 曲目列表快速展示。
+- 仅请求一次 Supabase 曲目目录。
+- 不要求用户先下载所有 MIDI。
+- 不阻塞 UI。
+
+### 第一次打开某一首歌曲
+
+- 检查本地 IndexedDB。
+- 未缓存则显示轻量加载状态并下载。
+- 完成后可以立即弹奏。
+- MIDI 自动写入 IndexedDB。
+
+### 第二次打开同一首歌曲
+
+- 直接从 IndexedDB 读取。
+- 不进行 MIDI 网络下载。
+- 不要求用户点击下载或授予本地文件夹访问权限。
+
+### 刷新浏览器
+
+- MIDI 仍然存在。
+- 曲目列表可先显示缓存。
+- 相同版本不重复下载。
+
+### 预下载
+
+当前曲库只有十几首 MIDI，总数据量非常小。
+
+增加可选的后台预下载机制：
+
+- 首先保证曲目列表可立即交互。
+- 浏览器空闲或首次目录加载完成后，可以低优先级下载未缓存的官方 MIDI。
+- 限制并发数量，例如 3。
+- 用户主动打开曲目的下载优先级最高。
+- 避免重复下载。
+- 网络慢、Save-Data、离线或缓存容量不足时，可以跳过预下载。
+- 预下载不能阻塞用户正在进行的 Challenge 或 Upload。
+
+不要把后台预下载变成每次进入曲库都重新下载全部歌曲。
+
+### 离线能力边界
+
+保证已加载的曲目列表和 MIDI 可以从本地缓存获取。
+
+检查现有 PWA/Service Worker 状态。如果项目没有真正实现应用 Shell 的离线缓存，应单独说明这一限制；可以在不引入过度复杂性的前提下补齐，但不能把“缓存 MIDI”误称为“整个应用完全离线可用”。
+
+现有 Challenge 上传需要网络，不要擅自改变其业务语义。
+
+## 九、保持 Challenge 和研究数据兼容
+
+这是关键要求，不能只改曲目列表而忽略后端。
+
+当前 Challenge 会在前端通过 `referenceSnapshot()` 根据演奏范围、左右手选择、转调等参数生成本次的 `reference.mid`，再连同演奏数据上传到 GCS。
+
+**这个流程需要保留。**
+
+要求：
+
+- 不改变当前 `referenceSnapshot()` 的基本语义。
+- 不破坏 Challenge 录音、暂停、结束、上传与 Finalize。
+- 保留现有 Alignment 和 Worker 流程。
+- 新增 `song_version_id` 在 Challenge/Attempt 数据链路中的传递。
+- 保留 `reference_hash` 和 `performance_hash`。
+- 为历史 `song_id` 建立明确的兼容映射，不猜测未知曲谱版本。
+- 修复以文件名作为 Exercise 唯一标识所导致的潜在版本冲突。
+- 新建 Exercise ID 时包含稳定的曲谱版本身份及影响实际练习内容的配置。
+- 不要把 KC Labeler 版本与 MIDI 原始版本混为一谈。
+- 确保后续 KT 导出能够追溯所用 MIDI 版本。
+
+同时检查排行榜、Challenged Songs、推荐接口和历史录音是否仍可以正确关联歌曲。
+
+旧路由，例如：
+
+`/challenge?source=builtin&id=canon-in-d.mid`
+
+应该通过兼容映射正常解析；新的导航使用稳定 ID，不能简单移除所有旧入口。
+
+## 十、数据库迁移和安全要求
+
+严格遵循：
+
+1. 不直接破坏现有生产数据。
+2. Migration 应可从现有 Schema 平滑升级。
+3. 不重写或删除历史 Attempt。
+4. 不直接覆盖现有 GCS 文件。
+5. 不改变未涉及的 Cloud Run 部署配置。
+6. 不将 service role key、数据库密码等服务端凭据放到前端。
+7. 不让普通用户拥有官方曲目目录的写入权限。
+8. 对历史记录无法确定的曲目版本，明确保留 unknown/null。
+9. Storage 上传与数据库写入需要补偿或重试策略，避免产生不完整的已发布曲目。
+10. 不要未经确认直接对生产 Supabase 执行破坏性操作。
+
+如果没有生产环境凭据，必须依然完成代码、Migration、导入脚本和测试，列出部署时需要执行的步骤。
+
+## 十一、测试
+
+请补充自动化测试，至少覆盖：
+
+- 首次获取 Supabase 曲目列表。
+- 目录请求去重。
+- Supabase 暂时不可用时使用缓存目录。
+- 首次 MIDI 下载。
+- 第二次 MIDI 命中 IndexedDB，不发送下载请求。
+- 刷新页面后缓存持久存在。
+- SHA-256 校验成功和失败。
+- 多次并发访问同一 MIDI 不会重复下载。
+- 更新到新版本后能够下载新 MIDI。
+- 相同内容 SHA 不会重复存储。
+- IndexedDB 故障时仍可在线播放。
+- 原有本地文件夹 MIDI 功能。
+- 旧歌曲 ID 到新 UUID 的迁移与解析。
+- Challenge 的 reference snapshot 与上传协议。
+- 历史成绩、推荐和训练数据仍然可以正确关联歌曲。
+
+运行项目现有测试、TypeScript 类型检查和构建，修复由本次改造引入的问题。
+
+## 十二、完成标准
+
+只有满足以下条件才算完成：
+
+- React 不再依赖本地静态 MIDI 曲库。
+- 前端不再维护官方 `manifest.json`。
+- 所有原有官方 MIDI 均有可执行的 Supabase 导入方案。
+- 曲目元数据由 Supabase 统一管理。
+- 原始 MIDI 放在 Supabase Storage。
+- 曲目使用稳定 UUID，版本由 SHA-256 识别。
+- 首次进入曲库只需一次目录查询。
+- 首次打开歌曲按需下载 MIDI。
+- 第二次打开同一版本直接命中 IndexedDB。
+- 刷新浏览器后 MIDI 缓存仍有效。
+- Challenge、排行榜、历史录音和现有 GCS 管道不受破坏。
+- 通过相关测试、类型检查及构建。
+
+## 十三、执行方式
+
+请直接实施代码修改，而不是只给建议。
+
+先检查现有结构，然后按以下顺序实施：
+
+1. 数据库 Migration 和曲目版本设计。
+2. Supabase Storage 与导入脚本。
+3. 曲目目录的数据读取模块。
+4. IndexedDB MIDI 缓存。
+5. React 选曲与播放集成。
+6. Challenge/Attempt 版本身份兼容。
+7. 移除前端静态曲库及废弃引用。
+8. 自动化测试和构建验证。
+
+优先使用现有依赖：`@supabase/supabase-js`、`idb-keyval`、`swr`、`jotai`。
+
+不要无意义地添加大型依赖，不要为这次功能重写整个项目。
+
+遇到实际代码与上述设计不同的情况，优先保证现有业务兼容，同时采用最简单、健壮、可长期维护的实现。
+
+**最后请汇报：**
+
+- 修改的文件及主要改动。
+- 新增的 SQL Migration。
+- Supabase Storage Bucket 的配置要求。
+- 如何将现有 MIDI 一次

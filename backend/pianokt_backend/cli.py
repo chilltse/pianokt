@@ -24,7 +24,17 @@ def main():
         sub.choices[name].add_argument('--source',choices=('lake','direct'),default='direct')
         sub.choices[name].add_argument('--environment', choices=('production','development','test','staging'), default='production')
     a=sub.add_parser('rebuild-projections'); a.add_argument('--attempt-id', required=True, type=uuid.UUID)
+    from .song_import import add_import_parser
+    add_import_parser(sub)
     args=p.parse_args()
+    if args.command=='import-song':
+        from .song_import import run_import
+        try:
+            print(json.dumps(run_import(args),ensure_ascii=False,indent=2))
+        except Exception as exc:
+            logging.getLogger(__name__).error('Song import failed (%s): %s', type(exc).__name__, exc)
+            raise SystemExit(1) from None
+        return
     if args.command=='rebuild-projections':
         from .online import connect
         from .projections import rebuild_projections

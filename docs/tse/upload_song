@@ -1,0 +1,140 @@
+: "${VERIFIED_LICENSE:?请先设置实际核实的许可证，禁止直接使用占位值}"
+
+# 1. Arabesques — Claude Debussy
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/arabesques.mid \
+  --title "Arabesques" \
+  --composer "Claude Debussy" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/arabesques.mid"
+#  --dry-run
+
+# 2. Canon in D — Johann Pachelbel
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/canon-in-d.mid \
+  --title "Canon in D" \
+  --composer "Johann Pachelbel" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/canon-in-d.mid"
+#  --dry-run
+
+# 3. Clair de Lune — Claude Debussy
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/clair-de-lune.mid \
+  --title "Clair de Lune" \
+  --composer "Claude Debussy" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/clair-de-lune.mid"
+#  --dry-run
+
+# 4. Für Elise — Ludwig van Beethoven
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/fur-elise.mid \
+  --title "Für Elise" \
+  --composer "Ludwig van Beethoven" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/fur-elise.mid"
+#  --dry-run
+
+# 5. Greensleeves — Traditional
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/greensleeves.mid \
+  --title "Greensleeves" \
+  --composer "Traditional" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/greensleeves.mid"
+#  --dry-run
+
+# 6. Gymnopédie No. 1 — Erik Satie
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/gymnopedie-no1.mid \
+  --title "Gymnopédie No. 1" \
+  --composer "Erik Satie" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/gymnopedie-no1.mid"
+#  --dry-run
+
+# 7. In the Hall of the Mountain King — Edvard Grieg
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/in-the-hall-of-the-mountain-king.mid \
+  --title "In the Hall of the Mountain King" \
+  --composer "Edvard Grieg" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/in-the-hall-of-the-mountain-king.mid"
+#  --dry-run
+
+# 8. La Cucaracha — Traditional
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/la-cucaracha.mid \
+  --title "La Cucaracha" \
+  --composer "Traditional" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/la-cucaracha.mid"
+#  --dry-run
+
+# 9. March in D Major — Johann Sebastian Bach
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/march-in-d-major.mid \
+  --title "March in D Major" \
+  --composer "Johann Sebastian Bach" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/march-in-d-major.mid"
+#  --dry-run
+
+# 10. Minuet in G Major — Christian Petzold
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/minuet-in-g-major.mid \
+  --title "Minuet in G Major" \
+  --composer "Christian Petzold" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/minuet-in-g-major.mid"
+#  --dry-run
+
+# 11. Moonlight Sonata — Ludwig van Beethoven
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/moonlight-sonata.mid \
+  --title "Moonlight Sonata" \
+  --composer "Ludwig van Beethoven" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/moonlight-sonata.mid"
+#  --dry-run
+
+# 12. Ode to Joy — Ludwig van Beethoven
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/ode-to-joy.mid \
+  --title "Ode to Joy" \
+  --composer "Ludwig van Beethoven" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/ode-to-joy.mid"
+#  --dry-run
+
+# 13. Rondo Alla Turca — Wolfgang Amadeus Mozart
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/rondo-alla-turca.mid \
+  --title "Rondo Alla Turca" \
+  --composer "Wolfgang Amadeus Mozart" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/rondo-alla-turca.mid"
+#  --dry-run
+
+# 14. Piano Sonata No. 11 — Wolfgang Amadeus Mozart
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/sonata-no-11.mid \
+  --title "Piano Sonata No. 11" \
+  --composer "Wolfgang Amadeus Mozart" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/sonata-no-11.mid"
+#  --dry-run
+
+# 15. Swan Lake — Pyotr Ilyich Tchaikovsky
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/swan-lake.mid \
+  --title "Swan Lake" \
+  --composer "Pyotr Ilyich Tchaikovsky" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/swan-lake.mid"
+#  --dry-run
+
+# 16. The Entertainer — Scott Joplin
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/the-entertainer.mid \
+  --title "The Entertainer" \
+  --composer "Scott Joplin" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/the-entertainer.mid"
+#  --dry-run
+
+# 17. Twinkle Twinkle Little Star — Traditional
+pianokt-data import-song /Users/tse/Downloads/sightread-main/public/music/songs/twinkle-twinkle-little-star.mid \
+  --title "Twinkle Twinkle Little Star" \
+  --composer "Traditional" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "https://github.com/sightread/sightread/blob/main/public/music/songs/twinkle-twinkle-little-star.mid"
+#  --dry-run
+
+
+

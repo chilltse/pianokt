@@ -25,14 +25,16 @@ def postgres(monkeypatch):
     monkeypatch.setenv('PIANOKT_ENV','production')
     name='pianokt_test_'+uuid4().hex
     with psycopg.connect(dsn,autocommit=True) as admin:
-        for role in ('anon','authenticated','pianokt_backend'):
+        for role in ('anon','authenticated','pianokt_backend','service_role'):
             if not admin.execute('select 1 from pg_roles where rolname=%s',(role,)).fetchone():
                 admin.execute(sql.SQL('create role {}').format(sql.Identifier(role)))
         admin.execute(sql.SQL('create database {}').format(sql.Identifier(name)))
     target=psycopg.conninfo.make_conninfo(dsn,dbname=name)
     try:
         with psycopg.connect(target,autocommit=True) as c:
-            c.execute('''create schema auth;
+            c.execute('''create schema storage;
+                create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
+                create schema auth;
                 create table auth.users(id uuid primary key,created_at timestamptz default now());
                 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
                 create table public.profiles(id uuid primary key,display_name text,avatar_url text);
@@ -40,7 +42,7 @@ def postgres(monkeypatch):
             for name_sql in ('006_play_events_pipeline.sql','007_user_play_logs_song_time_and_recording_link.sql',
                              '009_lakehouse_backend.sql','011_performance_event_telemetry.sql',
                              '013_visits_and_attempt_activity.sql','014_atomic_attempt_commit.sql',
-                             '015_direct_export_commit.sql','016_challenge_event_authority.sql','017_async_finalization.sql'):
+                             '015_direct_export_commit.sql','016_challenge_event_authority.sql','017_async_finalization.sql','018_song_versions.sql','019_practice_catalog_identity.sql'):
                 c.execute(Path('supabase/migrations',name_sql).read_text())
             c.execute("insert into auth.users(id,created_at) values(%s,'2025-01-01')",(U,))
         yield target

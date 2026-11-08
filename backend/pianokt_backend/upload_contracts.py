@@ -4,9 +4,9 @@ import math
 import uuid
 from datetime import datetime, timezone
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import Literal
-from .activity import Activity
+from .activity import Activity, Visit, ActivityEvent
 import os
 
 class Upload(BaseModel):
@@ -14,7 +14,10 @@ class Upload(BaseModel):
     schema_version:Literal[2]
     attempt_id:uuid.UUID
     song_id:str=Field(min_length=1,max_length=300)
-    song_source:str=Field(max_length=50)
+    midi_sha256:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
+    segment_id:uuid.UUID|None=None
+    segment_index:int|None=Field(default=None,ge=1)
+    song_source:Literal['builtin','local','generated','base64']
     song_title:str|None=Field(default=None,max_length=300)
     performance_hash:str=Field(pattern=r'^[0-9a-f]{64}$')
     reference_hash:str=Field(pattern=r'^[0-9a-f]{64}$')
@@ -23,10 +26,46 @@ class Upload(BaseModel):
     performance_events_hash:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
     performance_events_count:int|None=Field(default=None,ge=0,le=50000)
 
+    @model_validator(mode='after')
+    def validate_catalog_identity(self):
+        from .song_identity import validate_identity
+        self.song_id = validate_identity(self.song_source,self.song_id,self.segment_id,self.segment_index,self.midi_sha256)
+        return self
+
 class Finalize(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version:Literal[2,3]
     activity:Activity
+
+class FinalizeAttemptReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attempt_id: uuid.UUID
+    visit_attempt_sequence: int = Field(gt=0)
+    started_at: datetime
+
+class FinalizeActivity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner_id: uuid.UUID
+    visit: Visit
+    attempt: FinalizeAttemptReference
+    events: list[ActivityEvent] = Field(default_factory=list, max_length=1000)
+
+class FinalizeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal[3]
+    activity: FinalizeActivity
+
+    def resolve(self, row):
+        """Use the owner-scoped upload row already read by the endpoint."""
+        if str(self.activity.attempt.attempt_id) != str(row['id']):
+            raise HTTPException(422, 'Finalization does not match attempt')
+        activity = self.activity.model_dump(mode='json')
+        activity['attempt'].update({
+            key: row.get(key)
+            for key in ('song_id','song_source','segment_id','segment_index','midi_sha256')
+        })
+        return Finalize(schema_version=3, activity=activity)
+
 
 class LocalAlignment(BaseModel):
     performance_midi_base64:str=Field(min_length=1,max_length=12_000_000)
@@ -171,6 +210,11 @@ def validate_finalization(row, body, uid):
         raise HTTPException(403, 'Activity belongs to another signed-in user')
     if context is None or str(context.attempt_id) != str(row['id']) or context.song_id != row['song_id'] or context.song_source != row['song_source']:
         raise HTTPException(422, 'Finalization does not match attempt context')
+    for field in ('segment_id','segment_index','midi_sha256'):
+        expected = row.get(field) if row.get(field) is not None else (row.get('metadata') or {}).get(field)
+        actual = getattr(context, field)
+        if str(actual) != str(expected):
+            raise HTTPException(422, 'Finalization does not match original MIDI/segment identity')
     events = activity.events
     if len(events) < 2 or events[0].event_type != 'play_started' or events[-1].event_type not in ('finished', 'exited'):
         raise HTTPException(422, 'Cycle must start with play_started and end with finished or exited')

@@ -2,6 +2,7 @@
 import os
 import json
 import math
+import logging
 import uuid
 import base64
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,7 @@ from threading import Lock
 from .timing import stage, trace_id, event_count
 from fastapi import FastAPI,Depends,Header,HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel,Field
 from psycopg.types.json import Jsonb
 from .online import connect,owned_attempt,close_pool,enable_pool
@@ -24,7 +26,7 @@ from .outbox_dispatch import dispatch_after_commit, close_publisher
 from .upload_service import commit_finalization
 from .activity import Activity, save_activity
 from .provenance import recording_environment
-from .upload_contracts import (Upload, Finalize, LocalAlignment, finite_number, local_alignment_lab_enabled, validate_alignment_window_settings, validate_performance_events, validate_finalization)
+from .upload_contracts import (Upload, Finalize, FinalizeRequest, LocalAlignment, finite_number, local_alignment_lab_enabled, validate_alignment_window_settings, validate_performance_events, validate_finalization)
 
 @lru_cache(maxsize=1)
 def auth_client():
@@ -57,13 +59,31 @@ async def request_timing(request, call_next):
     # Path has no query string, so signed credentials cannot enter these logs.
     token = trace_id.set(str(uuid.uuid4()))
     try:
-        with stage('http.' + request.method + '.' + ('activity' if request.url.path == '/activity' else 'finalize' if request.url.path.endswith('/finalize') else 'other')):
-            response = await call_next(request)
-            response.headers['X-Request-ID'] = trace_id.get()
-            return response
+        try:
+            with stage('http.' + request.method + '.' + ('activity' if request.url.path == '/activity' else 'finalize' if request.url.path.endswith('/finalize') else 'other')):
+                response = await call_next(request)
+        except Exception:
+            # Return through the outer CORS middleware, rather than letting
+            # ServerErrorMiddleware emit an unadorned 500 outside CORS.
+            logging.getLogger(__name__).exception('Unhandled request error request_id=%s method=%s path=%s',
+                trace_id.get(),request.method,request.url.path)
+            response = JSONResponse(status_code=500,content={
+                'detail':'Internal server error; check backend logs using request_id',
+                'request_id':trace_id.get(),
+            })
+        response.headers['X-Request-ID'] = trace_id.get()
+        return response
     finally:
         trace_id.reset(token)
-app.add_middleware(CORSMiddleware,allow_origins=os.getenv('FRONTEND_ORIGINS','http://localhost:5173').split(','),allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type'],expose_headers=['X-Request-ID'])
+
+
+def frontend_origins(value=None):
+    configured = os.getenv('FRONTEND_ORIGINS') if value is None else value
+    if not configured:
+        configured = 'http://localhost:5173,http://127.0.0.1:5173'
+    return list(dict.fromkeys(origin.strip().rstrip('/') for origin in configured.split(',') if origin.strip()))
+
+app.add_middleware(CORSMiddleware,allow_origins=frontend_origins(),allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type'],expose_headers=['X-Request-ID'])
 
 def local_development_access_list_bypass_enabled():
     """Allow an authenticated local developer to bypass only the allow-list.
@@ -80,6 +100,9 @@ def local_development_access_list_bypass_enabled():
 
 def user(authorization:str=Header(...)):
     if not authorization.startswith('Bearer '): raise HTTPException(401,'Bearer token required')
+    missing=[name for name in ('SUPABASE_URL','SUPABASE_ANON_KEY') if not os.getenv(name)]
+    if missing:
+        raise HTTPException(503,'Backend configuration missing: '+', '.join(missing)+'. Start local API with --env-file backend/.env.local')
     try:
         with stage('auth.user'):
             r=auth_client().get(os.environ['SUPABASE_URL'].rstrip('/')+'/auth/v1/user',headers={'Authorization':authorization,'apikey':os.environ['SUPABASE_ANON_KEY']},timeout=10)
@@ -169,22 +192,25 @@ def create_attempt(body:Upload,uid=Depends(user)):
         if value is not None and (not finite_number(value) or not 0<=value<=maximum):
             raise HTTPException(422,f'Invalid {name}')
     environment = recording_environment()
+    metadata = body.model_dump(mode='json')
     with connect() as c:
+        from .song_identity import check_catalog_identity
+        check_catalog_identity(c,body)
         c.execute('insert into public.piano_learner_keys(user_id) values(%s) on conflict do nothing',(uid,))
         learner=c.execute('select learner_key from public.piano_learner_keys where user_id=%s',(uid,)).fetchone()['learner_key']
         prefix=f'midi/{learner}/{body.attempt_id}'
         events_key=prefix+'/performance-events.json' if body.performance_events_hash else None
-        c.execute('''insert into public.piano_attempts(id,user_id,learner_key,song_id,song_source,song_title,metadata,performance_key,reference_key,performance_events_key,performance_hash,reference_hash,performance_events_hash,performance_events_count,source_environment)
-            values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict(id) do nothing''',(body.attempt_id,uid,learner,body.song_id,body.song_source,body.song_title,Jsonb(body.model_dump(mode='json')),prefix+'/performance.mid',prefix+'/reference.mid',events_key,body.performance_hash,body.reference_hash,body.performance_events_hash,body.performance_events_count,environment))
+        c.execute('''insert into public.piano_attempts(id,user_id,learner_key,song_id,song_source,song_title,metadata,performance_key,reference_key,performance_events_key,performance_hash,reference_hash,performance_events_hash,performance_events_count,source_environment,segment_id,segment_index,midi_sha256)
+            values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict(id) do nothing''',(body.attempt_id,uid,learner,body.song_id,body.song_source,body.song_title,Jsonb(metadata),prefix+'/performance.mid',prefix+'/reference.mid',events_key,body.performance_hash,body.reference_hash,body.performance_events_hash,body.performance_events_count,environment,body.segment_id,body.segment_index,body.midi_sha256))
         row=owned_attempt(c,body.attempt_id,uid)
-        if not row or row['source_environment']!=environment or row['metadata']!=body.model_dump(mode='json'): raise HTTPException(409,'Attempt identity conflict')
+        if not row or row['source_environment']!=environment or row['metadata']!=metadata: raise HTTPException(409,'Attempt identity conflict')
     response=dict(attempt_id=str(body.attempt_id),performance_url=signed(row['performance_key'],'PUT'),reference_url=signed(row['reference_key'],'PUT'))
     if row['performance_events_key']:
         response['performance_events_url']=signed(row['performance_events_key'],'PUT','application/json')
     return response
 
 @app.post('/attempts/{attempt_id}/finalize', status_code=202)
-def finalize(attempt_id:uuid.UUID,body:Finalize,uid=Depends(user)):
+def finalize(attempt_id:uuid.UUID,body:FinalizeRequest,uid=Depends(user)):
     with stage('http.finalize'):
         if body.schema_version != 3:
             raise HTTPException(422, 'Async finalize requires schema_version=3; refresh the frontend')
@@ -193,7 +219,7 @@ def finalize(attempt_id:uuid.UUID,body:Finalize,uid=Depends(user)):
         with connect() as c:
             row=owned_attempt(c,attempt_id,uid)
             if not row: raise HTTPException(404,'Attempt not found')
-            row=commit_finalization(c,row,uid,body)
+            row=commit_finalization(c,row,uid,body.resolve(row))
         dispatch_after_commit(row['outbox_event_id'])
         return {'id':str(attempt_id),'status':row['status'],'validated_at':row['validated_at']}
 
@@ -219,7 +245,7 @@ def recommendations(uid=Depends(user)):
     with connect() as c:
         history=c.execute("select p.id,p.summary,p.alignment_run_id,p.result_key from public.piano_attempts p left join public.student_attempts a on a.attempt_id=p.id where p.user_id=%s and p.source_environment=%s and p.status='READY' and p.summary->>'alignment_quality_valid'='true' order by coalesce(a.started_at,p.created_at) desc,p.id desc limit 3",(uid,recording_environment())).fetchall()[::-1]
         pref=c.execute('select genres from public.piano_preferences where user_id=%s',(uid,)).fetchone()
-        catalog=c.execute('select song_id,title,difficulty,genres from public.piano_song_catalog where enabled').fetchall()
+        catalog=c.execute("""select song_id::text as song_id,segment_id::text as segment_id,segment_index, title || ' — ' || coalesce(segment_title,'Segment ' || segment_index) as title,difficulty,genres from public.piano_public_song_catalog""").fetchall()
     for attempt in history:
         result=json.loads(objects().read(attempt['result_key']))
         for k in ('notes','events_data','practice_metadata'): attempt[k]=result.get(k)
@@ -232,17 +258,18 @@ class Feedback(BaseModel):
     event_id:uuid.UUID
     recommendation_id:uuid.UUID
     song_id:str=Field(max_length=300)
+    segment_id:uuid.UUID
     event_type:str=Field(pattern='^(impression|click)$')
 
 @app.post('/recommendations/feedback')
 def feedback(body:Feedback,uid=Depends(user)):
     with connect() as c:
         row=c.execute('select response from public.piano_recommendations where id=%s and user_id=%s',(body.recommendation_id,uid)).fetchone()
-        if not row or body.song_id not in {s['song_id'] for s in row['response']['items']}: raise HTTPException(404,'Unknown recommendation')
-        inserted=c.execute('insert into public.piano_recommendation_feedback(event_id,recommendation_id,user_id,song_id,event_type) values(%s,%s,%s,%s,%s) on conflict do nothing returning event_id',(body.event_id,body.recommendation_id,uid,body.song_id,body.event_type)).fetchone()
+        if not row or not any(s['song_id']==body.song_id and s.get('segment_id')==str(body.segment_id) for s in row['response']['items']): raise HTTPException(404,'Unknown recommendation')
+        inserted=c.execute('insert into public.piano_recommendation_feedback(event_id,recommendation_id,user_id,song_id,segment_id,event_type) values(%s,%s,%s,%s,%s,%s) on conflict do nothing returning event_id',(body.event_id,body.recommendation_id,uid,body.song_id,body.segment_id,body.event_type)).fetchone()
         if not inserted:
             existing=c.execute('select * from public.piano_recommendation_feedback where event_id=%s',(body.event_id,)).fetchone()
-            if not existing or str(existing['user_id'])!=str(uid) or str(existing['recommendation_id'])!=str(body.recommendation_id) or existing['song_id']!=body.song_id or existing['event_type']!=body.event_type:
+            if not existing or str(existing['user_id'])!=str(uid) or str(existing['recommendation_id'])!=str(body.recommendation_id) or existing['song_id']!=body.song_id or str(existing['segment_id'])!=str(body.segment_id) or existing['event_type']!=body.event_type:
                 raise HTTPException(409,'Feedback event identity conflict')
         if inserted:
             c.execute('insert into public.piano_learner_keys(user_id) values(%s) on conflict do nothing',(uid,))

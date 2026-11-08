@@ -67,7 +67,7 @@ def main():
     with zipfile.ZipFile(archive) as z:
         assert z.testzip() is None
         assert 'pianokt/backend/pianokt_backend/api.py' in z.namelist()
-        assert 'pianokt/public/music/songs/ode-to-joy.mid' in z.namelist()
+        assert 'pianokt/scripts/import_song_catalog.py' in z.namelist()
         assert any(n.startswith('pianokt/src/features/data/') for n in z.namelist())
     print(f'Packaged {len(current)} files; {len(added)} added, {len(modified)} modified, {unchanged} unchanged, {len(removed)} removed; {archive.stat().st_size} bytes')
 

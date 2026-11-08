@@ -56,7 +56,7 @@ def db(monkeypatch):
 def packet(sequence=1,state='active',event_sequence=0,event_type='play_started',attempt=A):
     return Activity.model_validate(dict(owner_id=U,
         visit=dict(id=V,started_at='2026-01-01T00:00:00Z',occurred_at='2026-01-01T00:01:00Z',sequence=sequence,state=state),
-        attempt=dict(attempt_id=attempt,visit_attempt_sequence=1 if attempt==A else 2,song_id='song',song_source='builtin',started_at='2026-01-01T00:00:10Z'),
+        attempt=dict(attempt_id=attempt,visit_attempt_sequence=1 if attempt==A else 2,song_id='song',song_source='local',started_at='2026-01-01T00:00:10Z'),
         events=[dict(event_id=f'30000000-0000-0000-0000-{event_sequence+1:012}',event_sequence=event_sequence,event_type=event_type,occurred_at=f'2026-01-01T00:00:{10+event_sequence:02}Z',song_time_sec=event_sequence,elapsed_playing_sec=event_sequence,metadata={})]))
 
 
@@ -170,7 +170,7 @@ def test_finalize_is_atomic_and_immutable_on_retry(db):
 def test_worker_fencing_and_completion_rollback(db):
     from pianokt_backend.worker import commit_alignment
     db.execute('insert into piano_learner_keys(user_id) values(%s)',(U,))
-    db.execute("insert into piano_attempts(id,user_id,learner_key,song_id,song_source,performance_key,reference_key,performance_hash,reference_hash,status,lease_token,source_environment) values(%s,%s,(select learner_key from piano_learner_keys where user_id=%s),'song','builtin','p','r','h','h','PROCESSING',%s,'production')",(A,U,U,V))
+    db.execute("insert into piano_attempts(id,user_id,learner_key,song_id,song_source,performance_key,reference_key,performance_hash,reference_hash,status,lease_token,source_environment) values(%s,%s,(select learner_key from piano_learner_keys where user_id=%s),'song','local','p','r','h','h','PROCESSING',%s,'production')",(A,U,U,V))
     db.execute("insert into challenge_recordings(id,user_id,score_source) values(%s,%s,'pending')",(A,U))
     result={'alignment_run_id':'run','summary':{'accuracy':.8,'alignment_quality_valid':True}}
     with pytest.raises(RuntimeError,match='superseded'): commit_alignment(db,A,OTHER,'result.json',result)
@@ -239,7 +239,7 @@ def new_upload(db,aid=A):
     from pianokt_backend.provenance import recording_environment
     db.execute('insert into piano_learner_keys(user_id) values(%s) on conflict do nothing',(U,))
     return db.execute("""insert into piano_attempts(id,user_id,learner_key,song_id,song_source,metadata,performance_key,reference_key,performance_hash,reference_hash,source_environment)
-        values(%s,%s,(select learner_key from piano_learner_keys where user_id=%s),'song','builtin',%s,'p','r','h','h',%s) returning *""",
+        values(%s,%s,(select learner_key from piano_learner_keys where user_id=%s),'song','local',%s,'p','r','h','h',%s) returning *""",
         (aid,U,U,json.dumps({'schema_version':2,'duration_sec':10,'settings':{'client_accuracy_pct':99}}),recording_environment())).fetchone()
 
 
@@ -329,7 +329,7 @@ def test_http_v2_upload_finalize_without_live_activity_and_digest_retry(db,monke
     api.app.dependency_overrides[api.user]=lambda:U
     try:
         client=TestClient(api.app)
-        upload=dict(schema_version=2,attempt_id=A,song_id='song',song_source='builtin',
+        upload=dict(schema_version=2,attempt_id=A,song_id='song',song_source='local',
                     performance_hash=digest(midi),reference_hash=digest(midi),duration_sec=10)
         assert client.post('/attempts',json=upload).status_code==200
         body=full_packet().model_dump(mode='json')

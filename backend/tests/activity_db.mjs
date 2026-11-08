@@ -4,7 +4,8 @@ import { createInterface } from 'node:readline'
 
 const { PGlite } = await import(process.env.PGLITE_MODULE)
 const db = new PGlite()
-await db.exec(`create role anon; create role authenticated; create role pianokt_backend;
+await db.exec(`create role anon; create role authenticated; create role pianokt_backend; create role service_role;
+create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
 create schema auth; create table auth.users(id uuid primary key,created_at timestamptz default now());
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
 create table public.profiles(id uuid primary key,display_name text,avatar_url text);
@@ -17,7 +18,7 @@ for (const name of [
   '013_visits_and_attempt_activity.sql',
   '014_atomic_attempt_commit.sql',
   '015_direct_export_commit.sql',
-  '016_challenge_event_authority.sql','017_async_finalization.sql',
+  '016_challenge_event_authority.sql','017_async_finalization.sql','018_song_versions.sql','019_practice_catalog_identity.sql',
 ]) {
   await db.exec(await readFile(`supabase/migrations/${name}`, 'utf8'))
 }

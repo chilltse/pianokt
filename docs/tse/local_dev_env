@@ -1,0 +1,56 @@
+
+# 后端
+cd ~/my_code/pianokt
+
+# 激活 Python 3.13.12 虚拟环境
+source .venv/bin/activate
+
+# 加载本地环境变量
+set -a
+source backend/.env.local
+set +a
+
+# 启动 API
+uvicorn pianokt_backend.api:app \
+  --app-dir backend \
+  --env-file backend/.env.local \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --reload
+
+
+
+# 曲库
+cd ~/my_code/pianokt
+source .venv/bin/activate
+pip install -e ./backend
+pianokt-data import-song --help
+
+pianokt-data import-song ./test.mid \
+  --title "Test Song" \
+  --composer "Test Composer" \
+  --license "$VERIFIED_LICENSE" \
+  --source-url "$VERIFIED_SOURCE_URL" \
+  --dry-run
+
+# 本地 CORS
+# 前端地址与 Origin 必须完全匹配（协议、主机、端口）。
+# backend/.env.local 中允许的本地地址：
+# FRONTEND_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+# 修改环境文件后重启 API；只修改 .env 文件不保证触发 reload。
+# 后端异常现在返回带 CORS 头的 JSON 500 和 request_id。
+# 若仍失败，检查 Network 的请求 URL、状态和 Response，并用 request_id 对照后端日志。
+
+
+# GCS 直传与 API 是两层独立 CORS
+# performance.mid、reference.mid、performance-events.json 由浏览器直接 PUT 到 GCS。
+# FRONTEND_ORIGINS 只配置 FastAPI，不会修改 RAW_ROOT 对应 bucket 的 CORS。
+# GCS bucket 必须允许当前前端 Origin、PUT，以及 Content-Type / x-goog-if-generation-match。
+# 2026-11-08 已为 gs://pianokt-pianokt-raw 保留线上域名并加入：
+# http://localhost:5173、http://127.0.0.1:5173；不修改 IAM，也不公开 bucket。
+# 查看实际配置：
+gcloud storage buckets describe gs://pianokt-pianokt-raw --format='json(cors_config)'
+# Terraform 后续部署也需要在 local_development_origins 中保留上述本地地址，
+# 否则 apply 会按声明恢复配置。只对需要本地测试的部署显式启用，默认仍为空。
+# 若浏览器缓存了失败预检，DevTools Network 勾 Disable cache 后刷新再重新录制一次。
+# 不要用 mode:no-cors 绕过：它不能完成这里需要的 PUT 上传及状态检查。

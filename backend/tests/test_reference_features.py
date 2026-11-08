@@ -101,6 +101,13 @@ def test_version_changes_run_and_cache(tmp_path, monkeypatch):
     assert not _is_current_result(result, row, AlignmentConfig(), current, None, 0, None, None)
     result['kc_labeler_version'] = '1.2.0'
     assert _is_current_result(result, row, AlignmentConfig(), current, None, 0, None, None)
+    row.update(song_id='song',metadata=dict(segment_id='segment',segment_index=1,midi_sha256='a'*64))
+    assert not _is_current_result(result,row,AlignmentConfig(),current,None,0,None,None)
+    result.update(song_id='song',**row['metadata'])
+    assert _is_current_result(result,row,AlignmentConfig(),current,None,0,None,None)
+    result['midi_sha256']='b'*64
+    assert not _is_current_result(result,row,AlignmentConfig(),current,None,0,None,None)
+
 
 
 def test_registry_default_explicit_and_unknown():

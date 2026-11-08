@@ -5,7 +5,7 @@ import logging
 from typing import Literal
 from uuid import UUID
 from fastapi import HTTPException
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, model_validator, ConfigDict
 from psycopg.types.json import Jsonb
 from .provenance import recording_environment
 
@@ -19,11 +19,21 @@ class Visit(BaseModel):
 
 
 class AttemptContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     attempt_id: UUID
     visit_attempt_sequence: int = Field(gt=0)
     song_id: str = Field(min_length=1, max_length=300)
-    song_source: str = Field(max_length=50)
+    song_source: Literal['builtin','local','generated','base64']
     started_at: AwareDatetime
+    segment_id: UUID | None = None
+    segment_index: int | None = Field(default=None,ge=1)
+    midi_sha256: str | None = Field(default=None,pattern=r'^[0-9a-f]{64}$')
+
+    @model_validator(mode='after')
+    def validate_catalog_identity(self):
+        from .song_identity import validate_identity
+        self.song_id = validate_identity(self.song_source,self.song_id,self.segment_id,self.segment_index,self.midi_sha256)
+        return self
 
 
 class ActivityEvent(BaseModel):
@@ -79,13 +89,20 @@ def _save_activity_locked(c, uid, body):
     a = body.attempt
     if a is None:
         return
-    sql(c, 'attempt.insert', '''insert into public.student_attempts(attempt_id,user_id,visit_id,visit_attempt_sequence,song_id,song_source,started_at,source_environment)
-        values(%s,%s,%s,%s,%s,%s,%s,%s) on conflict do nothing''',
-        (a.attempt_id, uid, v.id, a.visit_attempt_sequence, a.song_id, a.song_source, a.started_at, environment))
+    from .song_identity import check_catalog_identity
+    inserted = sql(c, 'attempt.insert', '''insert into public.student_attempts(attempt_id,user_id,visit_id,visit_attempt_sequence,song_id,song_source,started_at,source_environment,segment_id,segment_index,midi_sha256)
+        values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict do nothing returning attempt_id''',
+        (a.attempt_id, uid, v.id, a.visit_attempt_sequence, a.song_id, a.song_source, a.started_at, environment, a.segment_id, a.segment_index, a.midi_sha256)).fetchone()
+    if inserted:
+        check_catalog_identity(c, a)
     row = sql(c, 'row_lock.activity_attempt', 'select * from public.student_attempts where attempt_id=%s for update', (a.attempt_id,)).fetchone()
     expected = (str(uid), str(v.id), a.visit_attempt_sequence, a.song_id, a.song_source, a.started_at, environment)
     if not row or (str(row['user_id']), str(row['visit_id']), row['visit_attempt_sequence'], row['song_id'], row['song_source'], row['started_at'], row['source_environment']) != expected:
         raise HTTPException(409, 'Attempt context identity conflict')
+    fields = ('segment_id','segment_index','midi_sha256')
+    for field in fields:
+        if str(row.get(field)) != str(getattr(a,field)):
+            raise HTTPException(409,'Attempt MIDI/segment identity conflict')
     if _can_batch_events(body.events, a, row['sealed_at']):
         _save_events_batch(c, uid, a, body.events)
     else:

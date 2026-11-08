@@ -109,7 +109,7 @@ def test_cycle_timezone_and_pause_state():
     middle.event_id=uuid4(); middle.event_type='resumed'
     body.activity.events.insert(1,middle)
     for i,event in enumerate(body.activity.events): event.event_sequence=i
-    row={'id':A,'song_id':'song','song_source':'builtin'}
+    row={'id':A,'song_id':'song','song_source':'local'}
     with pytest.raises(HTTPException,match='Resume requires'): validate_finalization(row,body,U)
     value=body.model_dump(mode='json'); value['activity']['events'][0]['occurred_at']='2026-01-01T00:00:00'
     with pytest.raises(ValidationError): Finalize.model_validate(value)
@@ -119,3 +119,13 @@ def test_v1_upload_contract_is_explicitly_rejected():
     from pianokt_backend.upload_contracts import Finalize
     from pydantic import ValidationError
     with pytest.raises(ValidationError): Finalize.model_validate({'cycle':{'events':[]}})
+
+
+def test_missing_auth_configuration_is_an_explicit_service_error(monkeypatch):
+    monkeypatch.delenv('SUPABASE_URL',raising=False)
+    monkeypatch.delenv('SUPABASE_ANON_KEY',raising=False)
+    with pytest.raises(HTTPException) as error:
+        user('Bearer diagnostic-invalid-token')
+    assert error.value.status_code==503
+    assert 'SUPABASE_URL' in error.value.detail
+    assert '--env-file backend/.env.local' in error.value.detail

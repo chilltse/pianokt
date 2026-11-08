@@ -1,7 +1,7 @@
 import { AppBar, MarketingFooter, Sizer } from '@/components'
 import React, { PropsWithChildren } from 'react'
 import { Link, LinkProps } from 'react-router'
-import manifest from './../../manifest.json'
+import { useSongManifest } from '@/features/data/library'
 import type { SongMetadata } from './../../types'
 import { Article, CaptionedImage } from './components'
 import { slugify } from './utils'
@@ -180,7 +180,7 @@ function FeedbackSection() {
 }
 
 function AttributionsSection() {
-  const sortedSongs = (manifest as SongMetadata[])
+  const sortedSongs = useSongManifest().filter(song => song.source === 'builtin')
     .slice()
     .sort((a, b) => a.title.localeCompare(b.title))
 

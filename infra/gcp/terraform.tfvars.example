@@ -10,7 +10,11 @@ schedules_paused = true
 
 source_environment = "production"
 lake_pipeline_paused = true
-# Keep production origins free of localhost; use a separate development deployment.
+# Prefer a separate development deployment; default production origins exclude localhost.
+# For local browsers that intentionally use this deployment's signed raw uploads:
+# local_development_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+# This configures BOTH API and raw-bucket CORS. A manual bucket-only fix is
+# overwritten by a later terraform apply unless the origins are declared here.
 local_development_origins = []
 
 # First rollout: keep relay_schedule="* * * * *" until direct dispatch is verified.

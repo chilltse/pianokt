@@ -5,7 +5,7 @@ def test_context_uses_stored_settings_and_finalized_visit():
     context = attempt_context(dict(id='attempt', song_id='song', metadata={
         'settings': {'midi_keyboard_used': False}}, finalization={
         'activity': {'visit': {'id': 'visit'}}}))
-    assert context == dict(attempt_id='attempt', song_id='song', midi_keyboard_used=False, visit_id='visit')
+    assert context == dict(attempt_id='attempt', song_id='song', midi_keyboard_used=False, visit_id='visit',segment_id=None,segment_index=None,midi_sha256=None)
     result = attach_attempt_context({'events_data': {'onset_seconds': [0, .5]}}, context)
     assert result['reference_events_count'] == 2
     assert result['visit_id'] == 'visit'

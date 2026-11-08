@@ -84,6 +84,9 @@ export async function runLocalAlignment(params: {
 export type RecordingUpload = {
   schemaVersion: 2
   songSource: string
+  segmentId?: string
+  segmentIndex?: number
+  midiSha256?: string
   songId: string
   songTitle: string | null
   durationSec: number
@@ -113,6 +116,20 @@ export type RecordingUpload = {
       playerSongTime: number
       performanceNowTimestamp: number
     }>
+  }
+}
+
+/** Finalization references the registered attempt; song identity lives on the server. */
+export function recordingActivity(params: RecordingUpload) {
+  const context = params.activity.attempt
+  if (!context) throw new Error('Challenge attempt context is missing')
+  return {
+    ...params.activity,
+    attempt: {
+      attempt_id: context.attempt_id,
+      visit_attempt_sequence: context.visit_attempt_sequence,
+      started_at: context.started_at,
+    },
   }
 }
 
@@ -151,6 +168,7 @@ async function uploadSealedRecording(
     } catch (error) {
       if (!(error instanceof BackendError) || error.status !== 404) throw error
     }
+    const activity = recordingActivity(params)
     const performance = decode(params.midiBase64),
       reference = decode(params.referenceMidiBase64)
     const [performanceHash, referenceHash] = await Promise.all([hash(performance), hash(reference)])
@@ -171,6 +189,10 @@ async function uploadSealedRecording(
         schema_version: 2,
         attempt_id: attemptId,
         song_id: params.songId,
+        ...(params.segmentId
+          ? { segment_id: params.segmentId, segment_index: params.segmentIndex }
+          : {}),
+        ...(params.midiSha256 ? { midi_sha256: params.midiSha256 } : {}),
         song_source: params.songSource,
         song_title: params.songTitle,
         duration_sec: params.durationSec,
@@ -219,7 +241,7 @@ async function uploadSealedRecording(
     if (failure?.status === 'rejected') throw failure.reason
     const result = await backendRequest<CloudReceipt>(
       `/attempts/${attemptId}/finalize`,
-      { schema_version: 3, activity: params.activity },
+      { schema_version: 3, activity },
       ownerId,
     )
     return { id: result.id, validated: Boolean(result.validated_at) }
@@ -259,7 +281,9 @@ export async function saveGcsRecording(
     const id = params.activity.attempt?.attempt_id
     if (!id || params.schemaVersion !== 2) throw new Error('Challenge v2 context is required')
     // Serialization seals values, including telemetry and the final event sequence.
-    const payload = JSON.parse(JSON.stringify(params)) as RecordingUpload
+    const payload = JSON.parse(
+      JSON.stringify(params),
+    ) as RecordingUpload
     const record = { id, ownerId, payload }
     const key = `${ownerId}:${id}`
     if (unsealed.has(key) && JSON.stringify(unsealed.get(key)) !== JSON.stringify(record))

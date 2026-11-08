@@ -123,7 +123,7 @@ export default function SongPreviewModal({
               <Loader width={48} height={48} className="animate-spin text-white" />
             </div>
           )}
-          {id && source && <SongPreview songId={id} source={source} />}
+          {id && source && <SongPreview id={id} source={source} />}
         </div>
         <div className="flex w-[420px] flex-col border-l border-gray-200 bg-white">
           <div className="px-6 pt-6 pb-3">
