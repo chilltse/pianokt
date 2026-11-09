@@ -13,6 +13,10 @@ def main():
     a.add_argument('--reference',required=True,type=Path); a.add_argument('--performance',required=True,type=Path)
     a.add_argument('--attempt-id'); a.add_argument('--song-id',default='local-example')
     a.add_argument('--raw',default='data/raw'); a.add_argument('--lake',default='data/lakehouse')
+    a=sub.add_parser('extract-reference', help='Extract reference-only MIDI/KC features locally')
+    a.add_argument('input', type=Path, help='MIDI file or directory (recursive)')
+    a.add_argument('--output', required=True, type=Path, help='JSON file, or output directory for directory input')
+    a.add_argument('--kc-labeler-version', default=None)
     a=sub.add_parser('pipeline'); a.add_argument('--replay',action='store_true')
     a=sub.add_parser('relay'); a.add_argument('--limit',type=int,default=1000)
     a.add_argument('--max-seconds',type=float,default=600)
@@ -27,6 +31,28 @@ def main():
     from .song_import import add_import_parser
     add_import_parser(sub)
     args=p.parse_args()
+    if args.command=='extract-reference':
+        from .alignment.feature_extraction.reference import extract_midi_reference
+        from .alignment.feature_extraction import resolve_kc_version
+        resolve_kc_version(args.kc_labeler_version)
+        directory = args.input.is_dir()
+        paths = sorted(x for x in args.input.rglob('*') if x.is_file() and x.suffix.lower() in ('.mid','.midi')) if directory else [args.input]
+        if not paths:
+            p.error('No MIDI files found')
+        failed = False
+        for path in paths:
+            target = args.output / path.relative_to(args.input).parent / (path.name + '.json') if directory else args.output
+            try:
+                result = extract_midi_reference(path, kc_labeler_version=args.kc_labeler_version)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False)+'\n')
+                print(json.dumps({'input':str(path),'output':str(target),'events':result['reference_events_count']}, ensure_ascii=False))
+            except Exception as exc:
+                logging.getLogger(__name__).error('%s: %s', path, exc)
+                failed = True
+        if failed:
+            raise SystemExit(1)
+        return
     if args.command=='import-song':
         from .song_import import run_import
         try:

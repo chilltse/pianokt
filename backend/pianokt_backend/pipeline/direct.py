@@ -11,7 +11,7 @@ def read_committed(connection, cutoff, environment='production'):
     rows = connection.execute("""
         select id as attempt_id, learner_key, alignment_run_id, result_key,
                reference_hash, performance_hash, result_digest,song_id,segment_id,segment_index,midi_sha256,
-               result_committed_at, summary, source_environment
+               result_committed_at, summary, source_environment, metadata
         from public.piano_attempts
         where status='READY' and source_environment=%s and
               (result_committed_at < %s or result_committed_at is null)
@@ -62,5 +62,8 @@ class CommittedResults:
             if not result.get('alignment_completed_at') or utc(result['alignment_completed_at']) >= boundary:
                 raise ValueError(f'Committed result completion outside cutoff: {aid}')
             validate_events(result['events_data'])
+            # Snapshot metadata supplies context for older immutable results.
+            # Keep it separate from the digest-verified artifact itself.
+            result['_attempt_settings'] = (row.get('metadata') or {}).get('settings') or {}
             result['_committed_digest'] = row['result_digest']
             yield result

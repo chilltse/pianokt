@@ -10,11 +10,9 @@ variable "project_id" { type = string }
 variable "region" { type = string }
 variable "image" { type = string }
 variable "spark_image" { type = string }
-variable "frontend_origin" { type = string }
-variable "local_development_origins" {
-  description = "Loopback browser origins allowed to call the public API and use signed raw-bucket uploads during local development."
+variable "frontend_origins" {
+  description = "Allowed browser origins for API and GCS CORS"
   type        = list(string)
-  default     = []
 }
 variable "supabase_url" { type = string }
 variable "supabase_anon_key" { type = string }
@@ -51,7 +49,7 @@ variable "lake_pipeline_paused" {
   description = "Direct Export is the default; explicitly opt in to scheduled lake materialization."
 }
 locals {
-  browser_origins = distinct(concat([var.frontend_origin], var.local_development_origins))
+  browser_origins = distinct(var.frontend_origins)
 }
 provider "google" {
   project = var.project_id

@@ -79,6 +79,9 @@ def test_training_cutoff_and_mask(tmp_path):
     from pianokt_backend.pipeline.tables import ENVELOPE_SCHEMA
     tables.merge('ops/completed_runs',[dict(event_id='r',event_type='alignment.completed',source_key='fixture',payload_json='{}')],ENVELOPE_SCHEMA,'event_id')
     r=dict(source_environment='production',attempt_id='a',alignment_run_id='r',learner_key='s',alignment_quality_valid=True,attempt_created_at='2026-01-01T00:00:00+00:00',practice_metadata={'settings':{}},events_data={'onset_seconds':[0,.5,2], 'pitches':[[[],[60]],[[],[61]],[[],[62]]], 'kc_vectors':[[False,1,False,None,1,None]]*3, 'reject_reason':{'event':[0,0,1],'note':[[[],[0]],[[],[0]],[[],[1]]]}})
+    r['events_data'].update(intervals_seconds=[[None,None,None],[None,.5,.5],[None,1.5,1.5]],
+        timing_offset_ms=[[[],[0]],[[],[0]],[[],[None]]],
+        pitch_offset_semitones=[[[],[0]],[[],[0]],[[],[None]]],extra_notes=[[],[],[]])
     r['alignment_completed_at']='2026-01-01T00:01:00+00:00'
     store.json('alignment/r/result.json',r)
     export_dataset(store,tables,'2026-02-01T00:00:00Z','datasets/test.json')
