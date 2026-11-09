@@ -1,0 +1,204 @@
+{
+  "model_version": "sha256:06a498bf828cd2c1445c4dcda76e2edc724678825ab6dd3e9af7327de174737a",
+  "feature_version": "sha256:1b59db4d1a8156400138163b416b5008c24e9b048c03044e90937e3c4adc332b",
+  "kc_labeler_version": "1.2.0",
+  "evidence_sha256": "00694f967a75a5d9804dbce7d0193b899dcae7f1dd27a5fb7fee25a6091e7149",
+  "student_id": "pianokt:development:diagnostic:phase2",
+  "history_revision": 0,
+  "history_sync_provenance": {
+    "status": "diagnostic_cold_start",
+    "event_count": 0,
+    "snapshot_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "student_id": "pianokt:development:diagnostic:phase2",
+    "source": "independent diagnostic; no real learner binding"
+  },
+  "cold_start": true,
+  "is_demo": false,
+  "items": [],
+  "top5": [],
+  "catalog_total": 3,
+  "eligible_count": 3,
+  "skipped": [
+    {
+      "song_id": "00000000-0000-0000-0000-000000000001",
+      "segment_id": "00000000-0000-0000-0000-000000000065",
+      "segment_index": 1,
+      "title": "Diagnostic 1",
+      "midi_sha256": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "status": "skipped",
+      "onset_count": 3,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "song_version": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "predicted_accuracy": 0.5343142747879028,
+      "reason": "unknown_ratio_exceeded"
+    },
+    {
+      "song_id": "00000000-0000-0000-0000-000000000002",
+      "segment_id": "00000000-0000-0000-0000-000000000066",
+      "segment_index": 1,
+      "title": "Diagnostic 2",
+      "midi_sha256": "8eec65c9c23796a3272e553567aaa07097f09403863537f56181d2a888f3e753",
+      "status": "skipped",
+      "onset_count": 3,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "song_version": "8eec65c9c23796a3272e553567aaa07097f09403863537f56181d2a888f3e753",
+      "predicted_accuracy": 0.5119506418704987,
+      "reason": "unknown_ratio_exceeded"
+    },
+    {
+      "song_id": "00000000-0000-0000-0000-000000000003",
+      "segment_id": "00000000-0000-0000-0000-000000000067",
+      "segment_index": 1,
+      "title": "Diagnostic 3",
+      "midi_sha256": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "status": "skipped",
+      "onset_count": 3,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "song_version": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "predicted_accuracy": 0.5343142747879028,
+      "reason": "unknown_ratio_exceeded"
+    }
+  ],
+  "candidates": [
+    {
+      "song_id": "00000000-0000-0000-0000-000000000001",
+      "segment_id": "00000000-0000-0000-0000-000000000065",
+      "segment_index": 1,
+      "title": "Diagnostic 1",
+      "midi_sha256": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "status": "skipped",
+      "onset_count": 3,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "song_version": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "predicted_accuracy": 0.5343142747879028,
+      "reason": "unknown_ratio_exceeded"
+    },
+    {
+      "song_id": "00000000-0000-0000-0000-000000000002",
+      "segment_id": "00000000-0000-0000-0000-000000000066",
+      "segment_index": 1,
+      "title": "Diagnostic 2",
+      "midi_sha256": "8eec65c9c23796a3272e553567aaa07097f09403863537f56181d2a888f3e753",
+      "status": "skipped",
+      "onset_count": 3,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "song_version": "8eec65c9c23796a3272e553567aaa07097f09403863537f56181d2a888f3e753",
+      "predicted_accuracy": 0.5119506418704987,
+      "reason": "unknown_ratio_exceeded"
+    },
+    {
+      "song_id": "00000000-0000-0000-0000-000000000003",
+      "segment_id": "00000000-0000-0000-0000-000000000067",
+      "segment_index": 1,
+      "title": "Diagnostic 3",
+      "midi_sha256": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "status": "skipped",
+      "onset_count": 3,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "song_version": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "predicted_accuracy": 0.5343142747879028,
+      "reason": "unknown_ratio_exceeded"
+    }
+  ],
+  "unique_kc_count": 6,
+  "prediction_calls": 1,
+  "sweet_spot_count": 0,
+  "rollout_count": 0,
+  "target_set_digest": "375d8313fce57f01283c67a099fe4d6ba60a345c955d8a2de679778efc74e7b7",
+  "targets": [
+    {
+      "candidate_id": "target-f3406dc8c9dc0bd9aa86625e4df00739488b110b012bef473d258c987c684d98",
+      "kc_vector": [
+        false,
+        2,
+        true,
+        50,
+        0,
+        0
+      ],
+      "weight": 0.1111111111111111
+    },
+    {
+      "candidate_id": "target-67ce3cff92f3f70b391c88b8e9a184c26ec2625937b04a6e6a1ae5a5d8544d61",
+      "kc_vector": [
+        false,
+        2,
+        true,
+        50,
+        1,
+        1
+      ],
+      "weight": 0.2222222222222222
+    },
+    {
+      "candidate_id": "target-e1db14f0de3b152fb88c6d039683f885e2d6f1105db2f96fb82c45ab27d2159f",
+      "kc_vector": [
+        false,
+        2,
+        true,
+        null,
+        2,
+        null
+      ],
+      "weight": 0.1111111111111111
+    },
+    {
+      "candidate_id": "target-1d1dea4cd092361c161bd657d726864da8ea9eb50dca88d1000bafdde32f07c7",
+      "kc_vector": [
+        true,
+        2,
+        true,
+        50,
+        0,
+        0
+      ],
+      "weight": 0.2222222222222222
+    },
+    {
+      "candidate_id": "target-76cfffd3fea97553f20a5a64c2854e58ad8b034ed76f1ba9be89f793d0e85b74",
+      "kc_vector": [
+        true,
+        2,
+        true,
+        50,
+        1,
+        1
+      ],
+      "weight": 0.1111111111111111
+    },
+    {
+      "candidate_id": "target-bac7a0fb5192122c3701672dfa8ff0f6eee680f907d20a6c07bb2244b0118335",
+      "kc_vector": [
+        true,
+        2,
+        true,
+        null,
+        2,
+        null
+      ],
+      "weight": 0.2222222222222222
+    }
+  ],
+  "target_seed": 7,
+  "p_before": {},
+  "latency_ms": 36.67,
+  "state_unchanged": true,
+  "execution_mode": "live_pykt_diagnostic",
+  "catalog_source": "generated diagnostic MIDI; mocked public Storage",
+  "configuration": {
+    "sweet_min": 0.6,
+    "sweet_max": 0.8,
+    "unknown_threshold": 0.05,
+    "shortlist": 10,
+    "target_count": 64,
+    "trajectories": 8,
+    "seed": 7,
+    "top_k": 5
+  }
+}

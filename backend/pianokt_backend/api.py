@@ -241,6 +241,21 @@ def download(attempt_id:uuid.UUID,kind:str='performance',uid=Depends(user)):
 
 @app.post('/recommendations')
 def recommendations(uid=Depends(user)):
+    if os.getenv('PIANOKT_RECOMMENDER', 'demo') == 'pykt':
+        from .pykt_runtime import recommend_for_user, database_guard
+        try:
+            database_guard()
+            response, attempt_id = recommend_for_user(uid, connect, objects())
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, 'PyKT/Storage unavailable; no fallback recommendation generated') from exc
+        except (ValueError, KeyError, OSError) as exc:
+            from .pykt_integration import CompatibilityError
+            detail = str(exc) if isinstance(exc, CompatibilityError) else 'PyKT source/configuration validation failed; check development configuration'
+            raise HTTPException(409, detail) from exc
+        with connect() as c:
+            rid=c.execute('insert into public.piano_recommendations(user_id,attempt_id,model_version,response) values(%s,%s,%s,%s) returning id',
+                          (uid,attempt_id,response['model_version'],Jsonb(response))).fetchone()['id']
+        return dict(recommendation_id=str(rid), **response)
     model=DemoRecommender()
     with connect() as c:
         history=c.execute("select p.id,p.summary,p.alignment_run_id,p.result_key from public.piano_attempts p left join public.student_attempts a on a.attempt_id=p.id where p.user_id=%s and p.source_environment=%s and p.status='READY' and p.summary->>'alignment_quality_valid'='true' order by coalesce(a.started_at,p.created_at) desc,p.id desc limit 3",(uid,recording_environment())).fetchall()[::-1]

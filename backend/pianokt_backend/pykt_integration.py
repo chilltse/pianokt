@@ -103,6 +103,7 @@ class PyKTClient:
         self.http = http
         self.compatibility = compatibility
         self._predictions = {}
+        self.prediction_calls = 0
 
     def _request(self, method, path, **kwargs):
         response = self.http.request(method, path, **kwargs)
@@ -154,6 +155,7 @@ class PyKTClient:
         for offset in range(0, len(missing), min(limit, 4096)):
             keys = missing[offset:offset + min(limit, 4096)]
             candidates = [dict(candidate_id=str(i), kc_vector=unique[key]) for i, key in enumerate(keys)]
+            self.prediction_calls += 1
             result = self._request('POST', f'/kt/students/{quote(student_id, safe="")}/predict',
                                    json=dict(kc_feature_names=list(MODEL_FIELDS), candidates=candidates))
             if result.get('state') != state:
@@ -185,9 +187,22 @@ class PyKTClient:
                     unknown_question_ratio=sum(p['unknown_question'] for p in output) / count if count else 0,
                     unknown_field_ratio=sum(len(p['unknown_fields']) for p in output) / (6 * count) if count else 0)
 
-    def rollout(self, student_id, rows, *, mode='sample', responses=None, seed=0, num_trajectories=1):
+    def rollout(self, student_id, rows, *, mode='sample', responses=None, seed=0, num_trajectories=1,
+                forecast_candidates=None, include_steps=True):
         self._validate_rows(rows)
-        self.inspect()
+        info = self.inspect()
+        forecasts = deepcopy(forecast_candidates or [])
+        if type(include_steps) is not bool:
+            raise ValueError('include_steps must be bool')
+        for candidate in forecasts:
+            if set(candidate) != {'candidate_id', 'kc_vector'} or not isinstance(candidate['candidate_id'], str) or not 1 <= len(candidate['candidate_id']) <= 256:
+                raise ValueError('Invalid forecast candidate')
+            validate_vector(candidate['kc_vector'])
+        if len({c['candidate_id'] for c in forecasts}) != len(forecasts):
+            raise ValueError('Duplicate forecast IDs')
+        check_rollout_limits(info['limits'], len(rows), num_trajectories, len(forecasts), include_steps)
+        if type(seed) is not int or not 0 <= seed < 2**63:
+            raise ValueError('Invalid rollout seed')
         state = self._state(student_id)
         if mode not in ('sample', 'forced') or not rows:
             raise ValueError("Nonempty sequence and sample/forced mode required")
@@ -200,9 +215,23 @@ class PyKTClient:
                     for i, row in enumerate(rows)]
         result = self._request('POST', '/kt/rollouts/evaluate', json=dict(student_id=student_id,
             kc_feature_names=list(MODEL_FIELDS), sequence=sequence, mode=mode, seed=seed,
-            num_trajectories=num_trajectories, retain_branch=False, include_steps=True))
+            num_trajectories=num_trajectories, retain_branch=False, include_steps=include_steps,
+            forecast_candidates=forecasts))
         if (result.get('state') != state or result.get('base_revision') != state['history_revision']
                 or result.get('branch') is not None or self._state(student_id) != state):
             raise CompatibilityError("Rollout state/version mismatch")
         return dict(result, kc_labeler_version=self.compatibility.kc_labeler_version,
                     evidence_sha256=self.compatibility.evidence_sha256, onsets=deepcopy(rows))
+
+
+def check_rollout_limits(limits, steps, trajectories, forecasts, include_steps=False):
+    required = ('max_candidates', 'max_rollout_steps', 'max_trajectories', 'max_rollout_work', 'max_output_steps')
+    if any(type(limits.get(k)) is not int or limits[k] < 1 for k in required):
+        raise CompatibilityError('Missing deployment rollout limits')
+    if (type(trajectories) is not int or not 1 <= trajectories <= min(1024, limits['max_trajectories'])
+            or not 1 <= steps <= min(4096, limits['max_rollout_steps'])
+            or steps * trajectories > limits['max_rollout_work']
+            or forecasts > min(4096, limits['max_candidates'])
+            or forecasts * trajectories > limits['max_output_steps']
+            or (include_steps and steps * trajectories > limits['max_output_steps'])):
+        raise ValueError('full_song_rollout_limit')

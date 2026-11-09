@@ -37,7 +37,8 @@ class Service:
                 ('/kt/rollouts/evaluate', 'post')]}}
         elif req.url.path == '/kt/model/info':
             data = dict(model_type='akt_fmkc', model_version=self.model, feature_version=self.feature,
-                        kc_feature_names=list(MODEL_FIELDS), limits={'max_candidates': 1})
+                        kc_feature_names=list(MODEL_FIELDS), limits={'max_candidates': 1, 'max_rollout_steps': 512, 'max_trajectories': 32,
+                                'max_rollout_work': 8192, 'max_output_steps': 2048})
         elif req.url.path.endswith('/state'):
             data = self.state()
         else:
