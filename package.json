@@ -70,7 +70,8 @@
     "test:activity": "node scripts/test_activity_tracker.mjs",
     "test:uploads": "node scripts/test_upload_queue.mjs",
     "test:protocol": "node scripts/test_upload_protocol.mjs",
-    "test:catalog": "node scripts/test_song_catalog.mjs"
+    "test:catalog": "node scripts/test_song_catalog.mjs",
+    "test:discovery": "node scripts/test_song_discovery.mjs"
   },
   "browserslist": {
     "production": [

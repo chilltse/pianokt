@@ -1,0 +1,626 @@
+{
+  "model_version": "sha256:06a498bf828cd2c1445c4dcda76e2edc724678825ab6dd3e9af7327de174737a",
+  "feature_version": "sha256:1b59db4d1a8156400138163b416b5008c24e9b048c03044e90937e3c4adc332b",
+  "kc_labeler_version": "1.2.0",
+  "evidence_sha256": "00694f967a75a5d9804dbce7d0193b899dcae7f1dd27a5fb7fee25a6091e7149",
+  "student_id": "pianokt:development:diagnostic:phase2",
+  "history_revision": 0,
+  "history_sync_provenance": {
+    "status": "diagnostic_cold_start",
+    "event_count": 0,
+    "snapshot_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "student_id": "pianokt:development:diagnostic:phase2",
+    "source": "independent diagnostic; no real learner binding"
+  },
+  "cold_start": true,
+  "is_demo": false,
+  "items": [
+    {
+      "song_id": "00000000-0000-0000-0000-000000000002",
+      "segment_id": "00000000-0000-0000-0000-000000000066",
+      "segment_index": 1,
+      "title": "Diagnostic 2",
+      "song_version": "8eec65c9c23796a3272e553567aaa07097f09403863537f56181d2a888f3e753",
+      "predicted_accuracy": 0.5119506418704987,
+      "predicted_learning_gain": 0.13019506695369878,
+      "score": 0.13019506695369878,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "rollout_statistics": {
+        "correct_rate": {
+          "mean": 0.7083333333333333,
+          "std": 0.2602082499332666,
+          "q05": 0.3333333333333333,
+          "q50": 0.6666666666666666,
+          "q95": 1.0
+        },
+        "correct_count": {
+          "mean": 2.125,
+          "std": 0.7806247497997998,
+          "q05": 1.0,
+          "q50": 2.0,
+          "q95": 3.0
+        },
+        "forecast_statistics": {
+          "target-f3406dc8c9dc0bd9aa86625e4df00739488b110b012bef473d258c987c684d98": {
+            "mean": 0.6261484771966934,
+            "std": 0.11859559042434718,
+            "q05": 0.4292065352201462,
+            "q50": 0.6959214806556702,
+            "q95": 0.7122345566749573
+          },
+          "target-67ce3cff92f3f70b391c88b8e9a184c26ec2625937b04a6e6a1ae5a5d8544d61": {
+            "mean": 0.5650639235973358,
+            "std": 0.19115150047319615,
+            "q05": 0.25807403177022936,
+            "q50": 0.6930733323097229,
+            "q95": 0.7084453701972961
+          },
+          "target-e1db14f0de3b152fb88c6d039683f885e2d6f1105db2f96fb82c45ab27d2159f": {
+            "mean": 0.858842171728611,
+            "std": 0.021312183368766564,
+            "q05": 0.8284780710935593,
+            "q50": 0.8711096942424774,
+            "q95": 0.8773882389068604
+          },
+          "target-1d1dea4cd092361c161bd657d726864da8ea9eb50dca88d1000bafdde32f07c7": {
+            "mean": 0.5493380799889565,
+            "std": 0.17015575294460394,
+            "q05": 0.28285898715257646,
+            "q50": 0.6637076139450073,
+            "q95": 0.6814951300621033
+          },
+          "target-76cfffd3fea97553f20a5a64c2854e58ad8b034ed76f1ba9be89f793d0e85b74": {
+            "mean": 0.5325896423310041,
+            "std": 0.2069705257334564,
+            "q05": 0.2113243483006954,
+            "q50": 0.6767672896385193,
+            "q95": 0.692021906375885
+          },
+          "target-bac7a0fb5192122c3701672dfa8ff0f6eee680f907d20a6c07bb2244b0118335": {
+            "mean": 0.8335544392466545,
+            "std": 0.022262466004176924,
+            "q05": 0.8026464313268662,
+            "q50": 0.8457027971744537,
+            "q95": 0.8533905148506165
+          }
+        },
+        "trajectories": 8,
+        "seed": 7
+      },
+      "reason": "模型隔离模拟在固定目标 KC 分布上的预期收益；不代表真实教学效果",
+      "rank": 1
+    },
+    {
+      "song_id": "00000000-0000-0000-0000-000000000001",
+      "segment_id": "00000000-0000-0000-0000-000000000065",
+      "segment_index": 1,
+      "title": "Diagnostic 1",
+      "song_version": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "predicted_accuracy": 0.5343142747879028,
+      "predicted_learning_gain": 0.09893053190575705,
+      "score": 0.09893053190575705,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "rollout_statistics": {
+        "correct_rate": {
+          "mean": 0.6666666666666666,
+          "std": 0.23570226039551584,
+          "q05": 0.3333333333333333,
+          "q50": 0.6666666666666666,
+          "q95": 1.0
+        },
+        "correct_count": {
+          "mean": 2.0,
+          "std": 0.7071067811865476,
+          "q05": 1.0,
+          "q50": 2.0,
+          "q95": 3.0
+        },
+        "forecast_statistics": {
+          "target-f3406dc8c9dc0bd9aa86625e4df00739488b110b012bef473d258c987c684d98": {
+            "mean": 0.5282571148127317,
+            "std": 0.2153933277619722,
+            "q05": 0.2042173482477665,
+            "q50": 0.6716594696044922,
+            "q95": 0.7117176055908203
+          },
+          "target-67ce3cff92f3f70b391c88b8e9a184c26ec2625937b04a6e6a1ae5a5d8544d61": {
+            "mean": 0.498657263815403,
+            "std": 0.24706347236779502,
+            "q05": 0.15177207961678504,
+            "q50": 0.6716399788856506,
+            "q95": 0.7077706456184387
+          },
+          "target-e1db14f0de3b152fb88c6d039683f885e2d6f1105db2f96fb82c45ab27d2159f": {
+            "mean": 0.8528863713145256,
+            "std": 0.02041665742949701,
+            "q05": 0.8238200753927231,
+            "q50": 0.8592964112758636,
+            "q95": 0.8771826028823853
+          },
+          "target-1d1dea4cd092361c161bd657d726864da8ea9eb50dca88d1000bafdde32f07c7": {
+            "mean": 0.5339310858398676,
+            "std": 0.17669292262577596,
+            "q05": 0.24751475527882577,
+            "q50": 0.6377466917037964,
+            "q95": 0.6819667220115662
+          },
+          "target-76cfffd3fea97553f20a5a64c2854e58ad8b034ed76f1ba9be89f793d0e85b74": {
+            "mean": 0.5330768655985594,
+            "std": 0.19918159478813094,
+            "q05": 0.20765104219317437,
+            "q50": 0.6537128686904907,
+            "q95": 0.6925989985466003
+          },
+          "target-bac7a0fb5192122c3701672dfa8ff0f6eee680f907d20a6c07bb2244b0118335": {
+            "mean": 0.8263576552271843,
+            "std": 0.0217330128693009,
+            "q05": 0.797196912765503,
+            "q50": 0.8326074779033661,
+            "q95": 0.8531229496002197
+          }
+        },
+        "trajectories": 8,
+        "seed": 7
+      },
+      "reason": "模型隔离模拟在固定目标 KC 分布上的预期收益；不代表真实教学效果",
+      "rank": 2
+    },
+    {
+      "song_id": "00000000-0000-0000-0000-000000000003",
+      "segment_id": "00000000-0000-0000-0000-000000000067",
+      "segment_index": 1,
+      "title": "Diagnostic 3",
+      "song_version": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "predicted_accuracy": 0.5343142747879028,
+      "predicted_learning_gain": 0.09893053190575705,
+      "score": 0.09893053190575705,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "rollout_statistics": {
+        "correct_rate": {
+          "mean": 0.6666666666666666,
+          "std": 0.23570226039551584,
+          "q05": 0.3333333333333333,
+          "q50": 0.6666666666666666,
+          "q95": 1.0
+        },
+        "correct_count": {
+          "mean": 2.0,
+          "std": 0.7071067811865476,
+          "q05": 1.0,
+          "q50": 2.0,
+          "q95": 3.0
+        },
+        "forecast_statistics": {
+          "target-f3406dc8c9dc0bd9aa86625e4df00739488b110b012bef473d258c987c684d98": {
+            "mean": 0.5282571148127317,
+            "std": 0.2153933277619722,
+            "q05": 0.2042173482477665,
+            "q50": 0.6716594696044922,
+            "q95": 0.7117176055908203
+          },
+          "target-67ce3cff92f3f70b391c88b8e9a184c26ec2625937b04a6e6a1ae5a5d8544d61": {
+            "mean": 0.498657263815403,
+            "std": 0.24706347236779502,
+            "q05": 0.15177207961678504,
+            "q50": 0.6716399788856506,
+            "q95": 0.7077706456184387
+          },
+          "target-e1db14f0de3b152fb88c6d039683f885e2d6f1105db2f96fb82c45ab27d2159f": {
+            "mean": 0.8528863713145256,
+            "std": 0.02041665742949701,
+            "q05": 0.8238200753927231,
+            "q50": 0.8592964112758636,
+            "q95": 0.8771826028823853
+          },
+          "target-1d1dea4cd092361c161bd657d726864da8ea9eb50dca88d1000bafdde32f07c7": {
+            "mean": 0.5339310858398676,
+            "std": 0.17669292262577596,
+            "q05": 0.24751475527882577,
+            "q50": 0.6377466917037964,
+            "q95": 0.6819667220115662
+          },
+          "target-76cfffd3fea97553f20a5a64c2854e58ad8b034ed76f1ba9be89f793d0e85b74": {
+            "mean": 0.5330768655985594,
+            "std": 0.19918159478813094,
+            "q05": 0.20765104219317437,
+            "q50": 0.6537128686904907,
+            "q95": 0.6925989985466003
+          },
+          "target-bac7a0fb5192122c3701672dfa8ff0f6eee680f907d20a6c07bb2244b0118335": {
+            "mean": 0.8263576552271843,
+            "std": 0.0217330128693009,
+            "q05": 0.797196912765503,
+            "q50": 0.8326074779033661,
+            "q95": 0.8531229496002197
+          }
+        },
+        "trajectories": 8,
+        "seed": 7
+      },
+      "reason": "模型隔离模拟在固定目标 KC 分布上的预期收益；不代表真实教学效果",
+      "rank": 3
+    }
+  ],
+  "top5": [
+    {
+      "song_id": "00000000-0000-0000-0000-000000000002",
+      "segment_id": "00000000-0000-0000-0000-000000000066",
+      "segment_index": 1,
+      "title": "Diagnostic 2",
+      "song_version": "8eec65c9c23796a3272e553567aaa07097f09403863537f56181d2a888f3e753",
+      "predicted_accuracy": 0.5119506418704987,
+      "predicted_learning_gain": 0.13019506695369878,
+      "score": 0.13019506695369878,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "rollout_statistics": {
+        "correct_rate": {
+          "mean": 0.7083333333333333,
+          "std": 0.2602082499332666,
+          "q05": 0.3333333333333333,
+          "q50": 0.6666666666666666,
+          "q95": 1.0
+        },
+        "correct_count": {
+          "mean": 2.125,
+          "std": 0.7806247497997998,
+          "q05": 1.0,
+          "q50": 2.0,
+          "q95": 3.0
+        },
+        "forecast_statistics": {
+          "target-f3406dc8c9dc0bd9aa86625e4df00739488b110b012bef473d258c987c684d98": {
+            "mean": 0.6261484771966934,
+            "std": 0.11859559042434718,
+            "q05": 0.4292065352201462,
+            "q50": 0.6959214806556702,
+            "q95": 0.7122345566749573
+          },
+          "target-67ce3cff92f3f70b391c88b8e9a184c26ec2625937b04a6e6a1ae5a5d8544d61": {
+            "mean": 0.5650639235973358,
+            "std": 0.19115150047319615,
+            "q05": 0.25807403177022936,
+            "q50": 0.6930733323097229,
+            "q95": 0.7084453701972961
+          },
+          "target-e1db14f0de3b152fb88c6d039683f885e2d6f1105db2f96fb82c45ab27d2159f": {
+            "mean": 0.858842171728611,
+            "std": 0.021312183368766564,
+            "q05": 0.8284780710935593,
+            "q50": 0.8711096942424774,
+            "q95": 0.8773882389068604
+          },
+          "target-1d1dea4cd092361c161bd657d726864da8ea9eb50dca88d1000bafdde32f07c7": {
+            "mean": 0.5493380799889565,
+            "std": 0.17015575294460394,
+            "q05": 0.28285898715257646,
+            "q50": 0.6637076139450073,
+            "q95": 0.6814951300621033
+          },
+          "target-76cfffd3fea97553f20a5a64c2854e58ad8b034ed76f1ba9be89f793d0e85b74": {
+            "mean": 0.5325896423310041,
+            "std": 0.2069705257334564,
+            "q05": 0.2113243483006954,
+            "q50": 0.6767672896385193,
+            "q95": 0.692021906375885
+          },
+          "target-bac7a0fb5192122c3701672dfa8ff0f6eee680f907d20a6c07bb2244b0118335": {
+            "mean": 0.8335544392466545,
+            "std": 0.022262466004176924,
+            "q05": 0.8026464313268662,
+            "q50": 0.8457027971744537,
+            "q95": 0.8533905148506165
+          }
+        },
+        "trajectories": 8,
+        "seed": 7
+      },
+      "reason": "模型隔离模拟在固定目标 KC 分布上的预期收益；不代表真实教学效果",
+      "rank": 1
+    },
+    {
+      "song_id": "00000000-0000-0000-0000-000000000001",
+      "segment_id": "00000000-0000-0000-0000-000000000065",
+      "segment_index": 1,
+      "title": "Diagnostic 1",
+      "song_version": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "predicted_accuracy": 0.5343142747879028,
+      "predicted_learning_gain": 0.09893053190575705,
+      "score": 0.09893053190575705,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "rollout_statistics": {
+        "correct_rate": {
+          "mean": 0.6666666666666666,
+          "std": 0.23570226039551584,
+          "q05": 0.3333333333333333,
+          "q50": 0.6666666666666666,
+          "q95": 1.0
+        },
+        "correct_count": {
+          "mean": 2.0,
+          "std": 0.7071067811865476,
+          "q05": 1.0,
+          "q50": 2.0,
+          "q95": 3.0
+        },
+        "forecast_statistics": {
+          "target-f3406dc8c9dc0bd9aa86625e4df00739488b110b012bef473d258c987c684d98": {
+            "mean": 0.5282571148127317,
+            "std": 0.2153933277619722,
+            "q05": 0.2042173482477665,
+            "q50": 0.6716594696044922,
+            "q95": 0.7117176055908203
+          },
+          "target-67ce3cff92f3f70b391c88b8e9a184c26ec2625937b04a6e6a1ae5a5d8544d61": {
+            "mean": 0.498657263815403,
+            "std": 0.24706347236779502,
+            "q05": 0.15177207961678504,
+            "q50": 0.6716399788856506,
+            "q95": 0.7077706456184387
+          },
+          "target-e1db14f0de3b152fb88c6d039683f885e2d6f1105db2f96fb82c45ab27d2159f": {
+            "mean": 0.8528863713145256,
+            "std": 0.02041665742949701,
+            "q05": 0.8238200753927231,
+            "q50": 0.8592964112758636,
+            "q95": 0.8771826028823853
+          },
+          "target-1d1dea4cd092361c161bd657d726864da8ea9eb50dca88d1000bafdde32f07c7": {
+            "mean": 0.5339310858398676,
+            "std": 0.17669292262577596,
+            "q05": 0.24751475527882577,
+            "q50": 0.6377466917037964,
+            "q95": 0.6819667220115662
+          },
+          "target-76cfffd3fea97553f20a5a64c2854e58ad8b034ed76f1ba9be89f793d0e85b74": {
+            "mean": 0.5330768655985594,
+            "std": 0.19918159478813094,
+            "q05": 0.20765104219317437,
+            "q50": 0.6537128686904907,
+            "q95": 0.6925989985466003
+          },
+          "target-bac7a0fb5192122c3701672dfa8ff0f6eee680f907d20a6c07bb2244b0118335": {
+            "mean": 0.8263576552271843,
+            "std": 0.0217330128693009,
+            "q05": 0.797196912765503,
+            "q50": 0.8326074779033661,
+            "q95": 0.8531229496002197
+          }
+        },
+        "trajectories": 8,
+        "seed": 7
+      },
+      "reason": "模型隔离模拟在固定目标 KC 分布上的预期收益；不代表真实教学效果",
+      "rank": 2
+    },
+    {
+      "song_id": "00000000-0000-0000-0000-000000000003",
+      "segment_id": "00000000-0000-0000-0000-000000000067",
+      "segment_index": 1,
+      "title": "Diagnostic 3",
+      "song_version": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "predicted_accuracy": 0.5343142747879028,
+      "predicted_learning_gain": 0.09893053190575705,
+      "score": 0.09893053190575705,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "rollout_statistics": {
+        "correct_rate": {
+          "mean": 0.6666666666666666,
+          "std": 0.23570226039551584,
+          "q05": 0.3333333333333333,
+          "q50": 0.6666666666666666,
+          "q95": 1.0
+        },
+        "correct_count": {
+          "mean": 2.0,
+          "std": 0.7071067811865476,
+          "q05": 1.0,
+          "q50": 2.0,
+          "q95": 3.0
+        },
+        "forecast_statistics": {
+          "target-f3406dc8c9dc0bd9aa86625e4df00739488b110b012bef473d258c987c684d98": {
+            "mean": 0.5282571148127317,
+            "std": 0.2153933277619722,
+            "q05": 0.2042173482477665,
+            "q50": 0.6716594696044922,
+            "q95": 0.7117176055908203
+          },
+          "target-67ce3cff92f3f70b391c88b8e9a184c26ec2625937b04a6e6a1ae5a5d8544d61": {
+            "mean": 0.498657263815403,
+            "std": 0.24706347236779502,
+            "q05": 0.15177207961678504,
+            "q50": 0.6716399788856506,
+            "q95": 0.7077706456184387
+          },
+          "target-e1db14f0de3b152fb88c6d039683f885e2d6f1105db2f96fb82c45ab27d2159f": {
+            "mean": 0.8528863713145256,
+            "std": 0.02041665742949701,
+            "q05": 0.8238200753927231,
+            "q50": 0.8592964112758636,
+            "q95": 0.8771826028823853
+          },
+          "target-1d1dea4cd092361c161bd657d726864da8ea9eb50dca88d1000bafdde32f07c7": {
+            "mean": 0.5339310858398676,
+            "std": 0.17669292262577596,
+            "q05": 0.24751475527882577,
+            "q50": 0.6377466917037964,
+            "q95": 0.6819667220115662
+          },
+          "target-76cfffd3fea97553f20a5a64c2854e58ad8b034ed76f1ba9be89f793d0e85b74": {
+            "mean": 0.5330768655985594,
+            "std": 0.19918159478813094,
+            "q05": 0.20765104219317437,
+            "q50": 0.6537128686904907,
+            "q95": 0.6925989985466003
+          },
+          "target-bac7a0fb5192122c3701672dfa8ff0f6eee680f907d20a6c07bb2244b0118335": {
+            "mean": 0.8263576552271843,
+            "std": 0.0217330128693009,
+            "q05": 0.797196912765503,
+            "q50": 0.8326074779033661,
+            "q95": 0.8531229496002197
+          }
+        },
+        "trajectories": 8,
+        "seed": 7
+      },
+      "reason": "模型隔离模拟在固定目标 KC 分布上的预期收益；不代表真实教学效果",
+      "rank": 3
+    }
+  ],
+  "catalog_total": 3,
+  "eligible_count": 3,
+  "skipped": [],
+  "candidates": [
+    {
+      "song_id": "00000000-0000-0000-0000-000000000001",
+      "segment_id": "00000000-0000-0000-0000-000000000065",
+      "segment_index": 1,
+      "title": "Diagnostic 1",
+      "midi_sha256": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "status": "ranked",
+      "onset_count": 3,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "song_version": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "predicted_accuracy": 0.5343142747879028,
+      "predicted_learning_gain": 0.09893053190575705
+    },
+    {
+      "song_id": "00000000-0000-0000-0000-000000000002",
+      "segment_id": "00000000-0000-0000-0000-000000000066",
+      "segment_index": 1,
+      "title": "Diagnostic 2",
+      "midi_sha256": "8eec65c9c23796a3272e553567aaa07097f09403863537f56181d2a888f3e753",
+      "status": "ranked",
+      "onset_count": 3,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "song_version": "8eec65c9c23796a3272e553567aaa07097f09403863537f56181d2a888f3e753",
+      "predicted_accuracy": 0.5119506418704987,
+      "predicted_learning_gain": 0.13019506695369878
+    },
+    {
+      "song_id": "00000000-0000-0000-0000-000000000003",
+      "segment_id": "00000000-0000-0000-0000-000000000067",
+      "segment_index": 1,
+      "title": "Diagnostic 3",
+      "midi_sha256": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "status": "ranked",
+      "onset_count": 3,
+      "unknown_question_ratio": 0.3333333333333333,
+      "unknown_field_ratio": 0.0,
+      "song_version": "d2eb110bc9d2cc6feab3a83be276e5f631a9597f9cff5ef35c6e9cea71799254",
+      "predicted_accuracy": 0.5343142747879028,
+      "predicted_learning_gain": 0.09893053190575705
+    }
+  ],
+  "unique_kc_count": 6,
+  "prediction_calls": 1,
+  "sweet_spot_count": 3,
+  "rollout_count": 3,
+  "target_set_digest": "375d8313fce57f01283c67a099fe4d6ba60a345c955d8a2de679778efc74e7b7",
+  "targets": [
+    {
+      "candidate_id": "target-f3406dc8c9dc0bd9aa86625e4df00739488b110b012bef473d258c987c684d98",
+      "kc_vector": [
+        false,
+        2,
+        true,
+        50,
+        0,
+        0
+      ],
+      "weight": 0.1111111111111111
+    },
+    {
+      "candidate_id": "target-67ce3cff92f3f70b391c88b8e9a184c26ec2625937b04a6e6a1ae5a5d8544d61",
+      "kc_vector": [
+        false,
+        2,
+        true,
+        50,
+        1,
+        1
+      ],
+      "weight": 0.2222222222222222
+    },
+    {
+      "candidate_id": "target-e1db14f0de3b152fb88c6d039683f885e2d6f1105db2f96fb82c45ab27d2159f",
+      "kc_vector": [
+        false,
+        2,
+        true,
+        null,
+        2,
+        null
+      ],
+      "weight": 0.1111111111111111
+    },
+    {
+      "candidate_id": "target-1d1dea4cd092361c161bd657d726864da8ea9eb50dca88d1000bafdde32f07c7",
+      "kc_vector": [
+        true,
+        2,
+        true,
+        50,
+        0,
+        0
+      ],
+      "weight": 0.2222222222222222
+    },
+    {
+      "candidate_id": "target-76cfffd3fea97553f20a5a64c2854e58ad8b034ed76f1ba9be89f793d0e85b74",
+      "kc_vector": [
+        true,
+        2,
+        true,
+        50,
+        1,
+        1
+      ],
+      "weight": 0.1111111111111111
+    },
+    {
+      "candidate_id": "target-bac7a0fb5192122c3701672dfa8ff0f6eee680f907d20a6c07bb2244b0118335",
+      "kc_vector": [
+        true,
+        2,
+        true,
+        null,
+        2,
+        null
+      ],
+      "weight": 0.2222222222222222
+    }
+  ],
+  "target_seed": 7,
+  "p_before": {
+    "target-f3406dc8c9dc0bd9aa86625e4df00739488b110b012bef473d258c987c684d98": 0.40711861848831177,
+    "target-67ce3cff92f3f70b391c88b8e9a184c26ec2625937b04a6e6a1ae5a5d8544d61": 0.2624197006225586,
+    "target-e1db14f0de3b152fb88c6d039683f885e2d6f1105db2f96fb82c45ab27d2159f": 0.8235231041908264,
+    "target-1d1dea4cd092361c161bd657d726864da8ea9eb50dca88d1000bafdde32f07c7": 0.5332562327384949,
+    "target-76cfffd3fea97553f20a5a64c2854e58ad8b034ed76f1ba9be89f793d0e85b74": 0.3052102029323578,
+    "target-bac7a0fb5192122c3701672dfa8ff0f6eee680f907d20a6c07bb2244b0118335": 0.807266891002655
+  },
+  "latency_ms": 316.62,
+  "state_unchanged": true,
+  "execution_mode": "live_pykt_diagnostic",
+  "catalog_source": "generated diagnostic MIDI; mocked public Storage",
+  "configuration": {
+    "sweet_min": 0,
+    "sweet_max": 1,
+    "unknown_threshold": 1.0,
+    "shortlist": 10,
+    "target_count": 64,
+    "trajectories": 8,
+    "seed": 7,
+    "top_k": 5
+  }
+}

@@ -105,9 +105,9 @@ export class Player {
   lateNotes: Map<number, SongNote> = new Map()
   skipMissedNotes = false
 
-  constructor(store: JotaiStore) {
+  constructor(store: JotaiStore, listenToMidi = true) {
     this.store = store
-    midi.subscribe((midiEvent) => this.processMidiEvent(midiEvent))
+    if (listenToMidi) midi.subscribe((midiEvent) => this.processMidiEvent(midiEvent))
   }
 
   getSong() {

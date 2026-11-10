@@ -3,6 +3,7 @@ import { useOptionalAuth } from '@/features/auth'
 import { useCatalogStatus, useSongManifest } from '@/features/data/library'
 import { prefetchSongs } from '@/features/data/prefetch'
 import { isInitializedAtom } from '@/features/persist/persistence'
+import { SongDiscovery, useSegmentPreview } from '@/features/song-discovery'
 import { SongPreviewModal } from '@/features/SongPreview'
 import { useEventListener } from '@/hooks'
 import { ChevronDown, FolderOpen } from '@/icons'
@@ -11,10 +12,7 @@ import clsx from 'clsx'
 import { useAtomValue } from 'jotai'
 import * as React from 'react'
 import { useState } from 'react'
-import { Table } from './components'
 import ManageFoldersForm from './components/AddFolderForm'
-import { SearchBox } from './components/Table/SearchBox'
-import { TableSkeleton } from './components/Table/Table'
 
 // TODO: after an upload, scroll to the newly uploaded song / make it focused.
 export default function SelectSongPage() {
@@ -23,9 +21,12 @@ export default function SelectSongPage() {
   const isInitialized = useAtomValue(isInitializedAtom)
   useOptionalAuth()
   const [isUploadFormOpen, setUploadForm] = useState<boolean>(false)
-  const [selectedSongId, setSelectedSongId] = useState<any>('')
-  const selectedSongMeta = songs.find((s) => s.id === selectedSongId)
-  const [search, setSearch] = useState('')
+  const [selectedSongMeta, setSelectedSongMeta] = useState<SongMetadata | null>(null)
+  const preview = useSegmentPreview()
+  const openPreview = (song: SongMetadata) => {
+    preview.stop()
+    setSelectedSongMeta(song)
+  }
   const [prefetch, setPrefetch] = useState(false)
   React.useEffect(() => {
     if (!prefetch || !catalogStatus.data) return
@@ -53,16 +54,17 @@ export default function SelectSongPage() {
     <>
       <title>Practice a song</title>
       <SongPreviewModal
-        show={!!selectedSongId}
-        songMeta={selectedSongMeta}
+        show={!!selectedSongMeta}
+        mode="play"
+        songMeta={selectedSongMeta ?? undefined}
         onClose={() => {
-          setSelectedSongId(null)
+          setSelectedSongMeta(null)
         }}
       />
       <Modal show={isUploadFormOpen} onClose={handleCloseAddNew} className="w-[min(100vw,500px)]">
         <ManageFoldersForm onClose={handleCloseAddNew} />
       </Modal>
-      <div className="bg-paper flex h-screen w-full flex-col overflow-hidden bg-amber-50/70">
+      <div className="bg-paper flex min-h-screen w-full flex-col bg-amber-50/70">
         <div className="shrink-0">
           <AppBar />
         </div>
@@ -74,9 +76,6 @@ export default function SelectSongPage() {
           </h3>
           <Sizer height={16} />
           <div className="flex items-center gap-4">
-            <div className="flex-1">
-              <SearchBox placeholder={'Search Titles'} onSearch={setSearch} autoFocus={true} />
-            </div>
             <button
               className={clsx(
                 'cursor-pointer flex-nowrap whitespace-nowrap',
@@ -99,17 +98,10 @@ export default function SelectSongPage() {
             空闲时缓存官方 MIDI
           </label>
           <Sizer height={20} />
-          {catalogStatus.error && (
-            <p role="status">
-              曲库暂时无法同步，已缓存曲目仍可使用。
-              <button onClick={() => void catalogStatus.mutate()}>重试</button>
-            </p>
-          )}
-          {catalogStatus.isLoading && !songs.length && <p role="status">正在加载曲库…</p>}
           {isInitialized ? (
-            <Table rows={songs} search={search} onSelectRow={setSelectedSongId} />
+            <SongDiscovery songs={songs} onSelect={openPreview} preview={preview} />
           ) : (
-            <TableSkeleton />
+            <p>Loading…</p>
           )}
         </div>
         <div className="shrink-0">

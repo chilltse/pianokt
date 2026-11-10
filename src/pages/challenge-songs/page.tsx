@@ -6,11 +6,12 @@ import {
   listChallengeRecordings,
 } from '@/features/challenge-history'
 import { useSongManifest } from '@/features/data/library'
+import { SongDiscovery, useSegmentPreview } from '@/features/song-discovery'
 import { SongPreviewModal } from '@/features/SongPreview'
 import type { SongMetadata, SongSource } from '@/types'
 import { getKey } from '@/utils'
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link } from 'react-router'
 
 type ChallengedItem = {
   source: SongSource
@@ -22,7 +23,8 @@ type ChallengedItem = {
 
 export default function ChallengeSongsPage() {
   const { user, loading: authLoading } = useRequireAuth('challenge-songs')
-  const { userId: routeUserId } = useParams<{ userId: string }>()
+  const preview = useSegmentPreview()
+  const [historyError, setHistoryError] = useState('')
   const songs = useSongManifest()
   const [recordings, setRecordings] = useState<ChallengedItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -38,36 +40,46 @@ export default function ChallengeSongsPage() {
 
   useEffect(() => {
     if (!user?.id) return
+    let active = true
     setLoading(true)
-    listChallengeRecordings().then((result) => {
-      setLoading(false)
-      if ('error' in result) return
-      const bestMap = getBestAccuracyPerSong(result.data)
-      const list: ChallengedItem[] = []
-      bestMap.forEach((v, key) => {
-        const [source, id] = key.split('/') as [SongSource, string]
-        const meta = songMap.get(key)
-        list.push({
-          source,
-          id: decodeURIComponent(id),
-          title: meta?.title ?? v.songTitle ?? id,
-          bestAccuracy: v.bestAccuracy,
-          success: isChallengeSuccess(v.bestAccuracy),
+    setRecordings([])
+    setHistoryError('')
+    listChallengeRecordings()
+      .then((result) => {
+        if (!active) return
+        setLoading(false)
+        if ('error' in result) {
+          setHistoryError('Unable to load challenge history. Please refresh to retry.')
+          return
+        }
+        const bestMap = getBestAccuracyPerSong(result.data)
+        const list: ChallengedItem[] = []
+        bestMap.forEach((v, key) => {
+          const separator = key.indexOf('/')
+          const source = key.slice(0, separator) as SongSource
+          const id = key.slice(separator + 1)
+          const meta = songMap.get(getKey(id, source))
+          list.push({
+            source,
+            id,
+            title: meta?.title ?? v.songTitle ?? id,
+            bestAccuracy: v.bestAccuracy,
+            success: isChallengeSuccess(v.bestAccuracy),
+          })
         })
+        list.sort((a, b) => b.bestAccuracy - a.bestAccuracy)
+        setRecordings(list)
       })
-      list.sort((a, b) => b.bestAccuracy - a.bestAccuracy)
-      setRecordings(list)
-    })
+      .catch(() => {
+        if (active) {
+          setLoading(false)
+          setHistoryError('Unable to load challenge history. Please refresh to retry.')
+        }
+      })
+    return () => {
+      active = false
+    }
   }, [user?.id, songMap])
-
-  const challengedKeys = useMemo(
-    () => new Set(recordings.map((r) => getKey(r.id, r.source))),
-    [recordings],
-  )
-  const recommended = useMemo(
-    () => songs.filter((s) => !challengedKeys.has(getKey(s.id, s.source))),
-    [songs, challengedKeys],
-  )
 
   if (authLoading || !user) {
     return (
@@ -81,6 +93,7 @@ export default function ChallengeSongsPage() {
   }
 
   const openPreview = (meta: SongMetadata) => {
+    preview.stop()
     setSelectedForPreview(meta)
   }
 
@@ -114,7 +127,13 @@ export default function ChallengeSongsPage() {
 
           {/* 挑战过的 */}
           <section>
-            <h3 className="text-lg font-medium text-gray-900">Challenged songs</h3>
+            <h3 className="text-lg font-medium text-gray-900">
+              Challenged Songs{' '}
+              <span className="text-sm font-normal text-gray-500">
+                (Alignment and scoring may take up to 5 minutes.)
+              </span>
+            </h3>
+            {historyError && <p role="alert">{historyError}</p>}
             <Sizer height={8} />
             {loading ? (
               <div className="rounded-xl border border-amber-100 bg-white py-12 text-center text-sm text-gray-400">
@@ -181,49 +200,11 @@ export default function ChallengeSongsPage() {
 
           <Sizer height={32} />
 
-          {/* 推荐你的 */}
-          <section>
-            <h3 className="text-lg font-medium text-gray-900">Recommended Songs</h3>
-            <Sizer height={8} />
-            {recommended.length === 0 ? (
-              <div className="rounded-xl border border-amber-100 bg-white py-12 text-center text-sm text-gray-500">
-                No recommended songs, please go to
-                <Link to="/songs" className="ml-1 font-medium text-gray-900 underline">
-                  "Practice a song"
-                </Link>
-                to have a practice.
-              </div>
-            ) : (
-              <div className="overflow-hidden rounded-xl border border-amber-100 bg-white shadow-sm">
-                <table className="w-full table-fixed text-sm">
-                  <thead>
-                    <tr className="border-b border-amber-100 bg-amber-50/50">
-                      <th className="px-4 py-2.5 text-left font-semibold text-gray-500">Title</th>
-                      <th className="w-24 px-4 py-2.5 text-right font-semibold text-gray-500">
-                        Length
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recommended.map((s) => (
-                      <tr
-                        key={getKey(s.id, s.source)}
-                        onClick={() => openPreview(s)}
-                        className="cursor-pointer border-b border-amber-50 transition-colors hover:bg-amber-50/50"
-                      >
-                        <td className="truncate px-4 py-2.5 font-medium text-gray-900">
-                          {s.title}
-                        </td>
-                        <td className="px-4 py-2.5 text-right text-gray-500 tabular-nums">
-                          {formatTime(Number(s.duration))}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
+          <SongDiscovery
+            songs={songs.filter((s) => s.source === 'builtin')}
+            onSelect={openPreview}
+            preview={preview}
+          />
 
           <Sizer height={24} />
           <p className="text-sm text-gray-500">
@@ -240,10 +221,4 @@ export default function ChallengeSongsPage() {
       </div>
     </>
   )
-}
-
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  return `${m}:${s.toString().padStart(2, '0')}`
 }
