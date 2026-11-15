@@ -4,7 +4,11 @@ import { atom, useAtomValue, useSetAtom } from 'jotai'
 import { useEffect } from 'react'
 import useSWR from 'swr'
 import { localSongsAtom } from '../persist'
-import { catalog } from './catalog'
+import { catalog, fetchFullSongCatalog } from './catalog'
+
+export function useFullSongCatalog() {
+  return useSWR('official-full-song-catalog:v1', fetchFullSongCatalog, { revalidateOnFocus: false, dedupingInterval: 60000 })
+}
 
 const builtinMetadataAtom = atom<Array<[string, SongMetadata]>>([])
 
@@ -54,7 +58,8 @@ export function useSongManifest(): SongMetadata[] {
 
 export function useSongMetadata(id: string, source: SongSource): SongMetadata | undefined {
   useCatalogStatus()
+  const full = useFullSongCatalog()
   const key = getKey(id, source)
   const songManifest = useAtomValue(songManifestAtom)
-  return songManifest.get(key)
+  return id.startsWith('full:') && source === 'builtin' ? full.data?.find(song => song.id === id) : songManifest.get(key)
 }

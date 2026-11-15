@@ -4,7 +4,7 @@ import { base64ToBytes } from '@/utils'
 import type { SWRResponse } from 'swr'
 import useSWRImmutable from 'swr/immutable'
 import * as persistence from '../persist/persistence'
-import { catalog, loadOfficialMidi } from './catalog'
+import { catalog, loadOfficialMidi, fetchFullSongCatalog } from './catalog'
 import { useCatalogStatus, useSongMetadata } from './library'
 
 function getBase64Song(data: string): Song {
@@ -17,6 +17,12 @@ export async function fetchSong(
   source: SongSource,
   identity?: SongMetadata,
 ): Promise<Song> {
+  if (source === 'builtin' && id.startsWith('full:')) {
+    const metadata = identity ?? (await fetchFullSongCatalog()).find(row => row.id === id)
+    if (metadata?.resource_kind !== 'full_song' || metadata.id !== `full:${metadata.song_id}` || !metadata.midi_sha256 || !metadata.storage_path) throw new Error('Unknown full song resource')
+    const bytes = await loadOfficialMidi({ midi_sha256: metadata.midi_sha256, storage_path: metadata.storage_path })
+    return {...parseMidi(new Uint8Array(bytes)), officialSongIdentity: {song_id: metadata.song_id!, midi_sha256: metadata.midi_sha256}}
+  }
   if (source === 'builtin') {
     await catalog.cached()
     let metadata = identity ?? catalog.resolve(id)
@@ -75,7 +81,7 @@ export function useSong(id: string, source: SongSource): SWRResponse<Song, any, 
       ? null
       : [id, source, metadata?.midi_sha256],
     () => {
-      if (source === 'builtin' && !metadata)
+      if (source === 'builtin' && !id.startsWith('full:') && !metadata)
         throw status.error ?? new Error('Unknown official song')
       return fetchSong(id, source, metadata)
     },

@@ -21,7 +21,7 @@ for (const size of [0, 1, 9, 10, 11, 20, 26, 100, 1001]) {
     frontend_note_accuracy: i === 0 ? 0.9 : 1,
     completion: i === 0 ? 1 : 0.2,
   }))
-  const groups = aggregateResults([...rows, ...rows], (p) => p >= 90)
+  const groups = aggregateResults([...rows, ...rows], (p) => p >= 80)
   assert.equal(groups.length, size ? 1 : 0)
   if (size) {
     assert.equal(groups[0].rows.length, size)
@@ -46,7 +46,7 @@ const partial = aggregateResults(
       is_completed: false,
     },
   ],
-  (p) => p >= 90,
+  (p) => p >= 80,
 )[0]
 assert.equal(partial.accuracy, null)
 assert.equal(partial.status, 'In Progress')

@@ -2,6 +2,7 @@ import { backendRequest } from '@/features/challenge-history/gcs'
 import { createStore, entries, update } from 'idb-keyval'
 import { useEffect, useState } from 'react'
 import type { ProductResult } from './model'
+import { withHistoryTimeout } from './readTimeout'
 
 const scope = `${import.meta.env.MODE}:${import.meta.env.VITE_PIANOKT_API_URL ?? 'unconfigured'}`
 const store = createStore('pianokt-product-results-v1', 'results')
@@ -33,52 +34,75 @@ export async function syncProductResults(owner: string) {
   }
 }
 export function useProductResults(owner?: string) {
-  const [state, setState] = useState<{ owner?: string; rows: ProductResult[]; error?: string }>({
+  const [state, setState] = useState<{
+    owner?: string
+    rows: ProductResult[]
+    error?: string
+    loading?: boolean
+  }>({
     rows: [],
   })
   useEffect(() => {
     if (!owner) return
     let active = true
     let remote: ProductResult[] = []
+    let refreshing = false
+    let loading = true
+    let loadError: string | undefined
     const local = async () => {
-      const rows = (await entries<string, Record>(store))
+      const rows = (await withHistoryTimeout(entries<string, Record>(store)))
         .map(([, r]) => r)
         .filter((r) => r.owner === owner && r.scope === scope)
         .map((r) => r.result)
       if (active)
         setState({
           owner,
+          loading,
+          error: loadError,
           rows: [...new Map([...remote, ...rows].map((r) => [r.attempt_id, r])).values()],
         })
     }
     const refresh = async () => {
-      await local()
-      await syncProductResults(owner)
+      if (refreshing || !active) return
+      refreshing = true
       try {
+        await local()
+        // Pending uploads must not delay reading an empty or existing history.
+        void syncProductResults(owner).catch(() => {})
         const collected: ProductResult[] = []
         let cursor: string | null = null
         do {
-          const page: { items: ProductResult[]; next: string | null } = await backendRequest(
-            `/product-results${cursor ? `?after=${cursor}` : ''}`,
-            undefined,
-            owner,
+          const page: { items: ProductResult[]; next: string | null } = await withHistoryTimeout(
+            backendRequest<{ items: ProductResult[]; next: string | null }>(
+              `/product-results${cursor ? `?after=${cursor}` : ''}`,
+              undefined,
+              owner,
+            ),
           )
           collected.push(...page.items)
           cursor = page.next
         } while (cursor && active)
         remote = collected
+        loading = false
+        loadError = undefined
         await local()
       } catch {
+        loading = false
+        loadError = 'Showing saved results. Online history is unavailable.'
         if (active)
           setState((s) => ({
             ...s,
+            owner,
+            loading: false,
             error: 'Showing saved results. Online history is unavailable.',
           }))
+      } finally {
+        refreshing = false
       }
     }
     void refresh()
     const timer = setInterval(() => void refresh(), 30000)
-    const changed = () => void local()
+    const changed = () => void refresh()
     const online = () => void refresh()
     window.addEventListener('pianokt-product-results', changed)
     window.addEventListener('online', online)
@@ -89,5 +113,5 @@ export function useProductResults(owner?: string) {
       window.removeEventListener('online', online)
     }
   }, [owner])
-  return state.owner === owner ? state : { rows: [] }
+  return state.owner === owner ? state : { rows: [], loading: true }
 }

@@ -15,6 +15,7 @@ export type SongSource = 'local' | 'builtin' | 'generated' | 'base64'
 export type SongMetadata = {
   /** Playable entry: official segment UUID, or a local/generated source ID. */
   id: string
+  resource_kind?: 'full_song'
   midi_sha256?: string
   storage_path?: string
   song_id?: string
@@ -86,6 +87,7 @@ export type OfficialMidiIdentity = {
 }
 
 export type Song = {
+  officialSongIdentity?: { song_id: string; midi_sha256: string }
   officialIdentity?: OfficialMidiIdentity
   tracks: Tracks
   duration: number

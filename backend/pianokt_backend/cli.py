@@ -31,7 +31,13 @@ def main():
     a=sub.add_parser('rebuild-projections'); a.add_argument('--attempt-id', required=True, type=uuid.UUID)
     from .song_import import add_import_parser
     add_import_parser(sub)
+    from .catalog_sync import add_sync_parser
+    add_sync_parser(sub)
     args=p.parse_args()
+    if args.command=='sync-catalog':
+        from .catalog_sync import run_sync
+        print(json.dumps(run_sync(args),ensure_ascii=False,indent=2))
+        return
     if args.command=='extract-reference':
         from .alignment.feature_extraction.reference import extract_midi_reference
         from .alignment.feature_extraction import resolve_kc_version

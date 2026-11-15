@@ -114,3 +114,13 @@ export const loadOfficialMidi = createMidiLoader(binaryStore, async (path) => {
   if (!response.ok) throw new Error(`MIDI download failed: ${response.status}`)
   return response.arrayBuffer()
 })
+
+export async function fetchFullSongCatalog(): Promise<SongMetadata[]> {
+  if (!supabase) throw new Error('Supabase song catalog is not configured')
+  const { data, error } = await supabase.rpc('piano_public_full_song_catalog')
+  if (error) throw error
+  return (data as CatalogRow[]).map(row => {
+    if (!uuid.test(row.song_id) || !/^[a-f0-9]{64}$/.test(row.midi_sha256) || row.storage_path !== `midi/${row.midi_sha256}.mid` || !(row.duration_ms > 0)) throw new Error('Invalid full song resource')
+    return {...row, id: `full:${row.song_id}`, source: 'builtin', resource_kind: 'full_song', file: row.storage_path, duration: row.duration_ms / 1000}
+  })
+}

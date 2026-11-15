@@ -28,7 +28,7 @@ export function useSegmentPreview() {
     [],
   )
   async function toggle(song: SongMetadata) {
-    const id = getKey(song.source === 'builtin' ? song.segment_id! : song.id, song.source)
+    const id = getKey(song.id, song.source)
     if (active.current?.id === id) {
       const player = active.current.player
       if (player.getTime() >= player.getDuration()) player.seek(0)

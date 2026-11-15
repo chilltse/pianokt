@@ -28,7 +28,9 @@ const songs = Array.from({ length: 23 }, (_, i) => ({
 }))
 assert.equal(model.searchSegments(songs, 'CHOPIN segment').length, 23)
 assert.equal(model.searchSegments(songs, 'segment 22')[0].segment_id, 's22')
-const history = load('src/features/challenge-history/api.ts')
+const history = load('src/features/challenge-history/api.ts', { '../../../shared/challenge-scoring.json': { default: JSON.parse(readFileSync('shared/challenge-scoring.json', 'utf8')) } })
+assert.equal(history.isChallengeSuccess(79.99), false)
+assert.equal(history.isChallengeSuccess(80), true)
 const best = history.getBestAccuracyPerSong([
   {
     song_source: 'builtin',
@@ -272,11 +274,12 @@ const ui = load('src/features/song-discovery/index.tsx', {
       (props) => React.createElement('svg', { ...props, 'data-icon': name }),
     ]),
   ),
-  '@/features/data/library': { useCatalogStatus: () => ({ data: catalogSongs }) },
+  '@/features/data/library': { useFullSongCatalog: () => ({ data: [] }), useCatalogStatus: () => ({ data: catalogSongs }) },
   '@/utils': { getKey: (id, source) => `${source}/${id}`, formatTime: () => '0:10' },
   './hooks': realHooks,
   './model': model,
 })
+let compactMode = false
 let hook,
   selected = 0
 function Page() {
@@ -286,6 +289,7 @@ function Page() {
     null,
     React.createElement(ui.SegmentMarkButton, { song: songs[0], marks: hook }),
     React.createElement(ui.SongDiscovery, {
+      compact: compactMode,
       songs: catalogSongs,
       marks: hook,
       preview: listPreview,
@@ -433,6 +437,15 @@ assert.equal(
   transport.every((row) => ['user-a', 'user-b'].includes(row.owner)),
   true,
 )
+compactMode = true
+await render()
+assert.ok(document.body.textContent.includes('Recommended for You'))
+assert.ok(!document.body.textContent.includes('Marked Songs'))
+const favoritesFilter = [...document.querySelectorAll('button')].find(b => b.textContent.startsWith('Favorites ('))
+assert.ok(favoritesFilter)
+await click(favoritesFilter)
+assert.equal(favoritesFilter.getAttribute('aria-pressed'), 'true')
+assert.ok(document.querySelectorAll('tbody tr').length <= 10)
 await React.act(async () => root.unmount())
 // Render the actual Challenge page: history actions require explicit segment identity.
 let modalProps,
@@ -441,14 +454,15 @@ listPreview.stop = () => {
   stops++
 }
 const productModel = load('src/features/product-results/model.ts')
+let historyOverride = null
 const productLibrary = load('src/features/product-results/ChallengeLibrary.tsx', {
   react: React, 'react/jsx-runtime': jsx,
   '@/features/song-discovery': ui,
   '@/features/song-discovery/model': model,
-  '@/features/challenge-history': { isChallengeSuccess: n => n >= 90 },
+  '@/features/challenge-history': { isChallengeSuccess: n => n >= 80 },
   '@/utils': { formatTime: () => '0:10' },
   './model': productModel,
-  './store': { useProductResults: () => ({ rows: [
+  './store': { useProductResults: () => historyOverride ?? ({ rows: [
     {attempt_id:'a',song_source:'builtin',segment_id:'s1',midi_sha256:songs[0].midi_sha256,ended_at:'2026-11-15',completion:1,is_completed:true,frontend_note_accuracy:.91},
     {attempt_id:'b',song_source:'builtin',song_id:'legacy',ended_at:'2026-11-14',completion:.2,is_completed:false,frontend_note_accuracy:null},
   ] }) },
@@ -461,7 +475,7 @@ const Challenge = load('src/pages/challenge-songs/page.tsx', {
   '@/features/auth': { useRequireAuth: () => ({ user: { id: userId }, loading: false }) },
   '@/features/challenge-history': {
     ...history,
-    isChallengeSuccess: (n) => n >= 90,
+    isChallengeSuccess: (n) => n >= 80,
     listChallengeRecordings: async () => ({
       data: [
         {
@@ -500,6 +514,11 @@ await React.act(async () => {
   await tick()
 })
 await flush()
+assert.ok(document.body.textContent.includes('Continue challenge'))
+assert.ok(document.querySelector('article').textContent.includes('Best Accuracy · 91.0%'))
+assert.ok(document.body.textContent.includes('Recommended for You'))
+assert.ok(!document.body.textContent.includes('Featured Songs'))
+assert.equal(document.querySelectorAll('section').length >= 3, true)
 await click([...document.querySelectorAll('[role="tab"]')].find(b=>b.textContent==='Challenged Songs'))
 const historyRows = document.querySelectorAll('article')
 assert.equal(historyRows.length, 2)
@@ -511,6 +530,24 @@ await click([...historyRows[0].querySelectorAll('button')].find(b=>b.textContent
 assert.equal(modalProps.songMeta.segment_id, 's1')
 assert.equal(modalProps.mode, 'challenge')
 assert.equal(stops, 1)
+await click([...document.querySelectorAll('[role="tab"]')].find(b=>b.textContent==='All Songs'))
+for (const [state, message] of [
+  [{rows:[],loading:true}, 'Loading your most recent challenge'],
+  [{rows:[],loading:false,error:'failed'}, 'Unable to load your most recent challenge'],
+  [{rows:[],loading:false}, 'Your most recent challenge will appear here.'],
+]) {
+  historyOverride = state
+  await React.act(async () => {
+    root.render(React.createElement(swr.SWRConfig, { value: config }, React.createElement(Challenge)))
+    await tick()
+  })
+  assert.ok(document.body.textContent.includes(message))
+  assert.ok(document.body.textContent.includes('Recommended for You'))
+  for (const button of document.querySelectorAll('button')) {
+    assert.ok(button.classList.contains('cursor-pointer'), button.textContent)
+    if (button.disabled) assert.ok(button.classList.contains('disabled:cursor-not-allowed'))
+  }
+}
 await React.act(async () => root.unmount())
 dom.window.close()
 console.log(

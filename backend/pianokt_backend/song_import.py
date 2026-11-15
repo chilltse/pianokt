@@ -193,7 +193,7 @@ def publish(c, item, *, title, composer, license, source_url, slug, song_id=None
             sid = uuid.uuid4()
             c.execute('''insert into public.piano_song_catalog(song_id,slug,title,composer,license,source_url,difficulty,genres)
                 values(%s,%s,%s,%s,%s,%s,%s,%s)''', (sid,slug,title,composer,license,source_url,difficulty,list(genres)))
-        segment = c.execute('select * from public.piano_song_segments where song_id=%s and segment_index=%s for update', (sid,segment_index)).fetchone()
+        segment = c.execute("select * from public.piano_song_segments where song_id=%s and segment_index=%s and status<>'archived' for update", (sid,segment_index)).fetchone()
         if segment:
             segment_id = segment['segment_id']
             if segment_title is not None and segment['title'] != segment_title:

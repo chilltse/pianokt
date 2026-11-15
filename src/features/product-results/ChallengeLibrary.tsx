@@ -2,11 +2,10 @@ import { isChallengeSuccess } from '@/features/challenge-history'
 import {
   SegmentMarkButton,
   SegmentPreviewButton,
-  SegmentTable,
+  SongDiscovery,
   useSegmentPreview,
 } from '@/features/song-discovery'
 import { useSegmentMarks } from '@/features/song-discovery/hooks'
-import { searchSegments } from '@/features/song-discovery/model'
 import type { SongMetadata } from '@/types'
 import { formatTime } from '@/utils'
 import { useState } from 'react'
@@ -22,26 +21,14 @@ type Props = {
   onSelect: (song: SongMetadata) => void
 }
 export function ChallengeLibrary({ owner, songs, marks, preview, onSelect }: Props) {
-  const { rows, error } = useProductResults(owner)
+  const { rows, error, loading } = useProductResults(owner)
   const groups = aggregateResults(rows, isChallengeSuccess)
   const [tab, setTab] = useState('All Songs')
-  const [filter, setFilter] = useState('All')
-  const [query, setQuery] = useState('')
-  const [page, setPage] = useState(1)
   const [historyFilter, setHistoryFilter] = useState('All')
   const [sort, setSort] = useState('Recently played')
   const [expanded, setExpanded] = useState<string | null>(null)
   const [historyPage, setHistoryPage] = useState(1)
   const tried = new Set(groups.map((g) => g.latest.segment_id))
-  const catalog = searchSegments(songs, query).filter(
-    (s) =>
-      filter === 'All' ||
-      (filter === 'Favorites' && marks.marks.has(s.segment_id!)) ||
-      (filter === 'Challenged' && tried.has(s.segment_id)) ||
-      (filter === 'Not Tried' && !tried.has(s.segment_id)),
-  )
-  const pages = Math.max(1, Math.ceil(catalog.length / 10)),
-    current = Math.min(page, pages)
   const history = groups
     .filter((g) => historyFilter === 'All' || g.status === historyFilter)
     .sort((a, b) =>
@@ -62,7 +49,10 @@ export function ChallengeLibrary({ owner, songs, marks, preview, onSelect }: Pro
     <div className="flex items-center gap-2">
       <SegmentMarkButton song={s} marks={marks} />
       <SegmentPreviewButton song={s} preview={preview} />
-      <button className="rounded-lg bg-amber-100 px-4 py-2 text-sm" onClick={() => onSelect(s)}>
+      <button
+        className="cursor-pointer rounded-lg bg-amber-100 px-4 py-2 text-sm disabled:cursor-not-allowed"
+        onClick={() => onSelect(s)}
+      >
         {label}
       </button>
     </div>
@@ -92,11 +82,9 @@ export function ChallengeLibrary({ owner, songs, marks, preview, onSelect }: Pro
         </div>
         <div className="flex justify-between gap-4 text-sm">
           <span>Best Completion · {(g.completion * 100).toFixed(1)}%</span>
-          {details && (
-            <span>
-              Best Accuracy · {g.accuracy === null ? '—' : `${(g.accuracy * 100).toFixed(1)}%`}
-            </span>
-          )}
+          <span>
+            Best Accuracy · {g.accuracy === null ? '—' : `${(g.accuracy * 100).toFixed(1)}%`}
+          </span>
         </div>
         <progress
           className="h-2 w-full accent-amber-500"
@@ -111,6 +99,7 @@ export function ChallengeLibrary({ owner, songs, marks, preview, onSelect }: Pro
           <div className="flex items-center gap-3">
             {details && (
               <button
+                className="cursor-pointer disabled:cursor-not-allowed"
                 aria-expanded={expanded === g.key}
                 onClick={() => setExpanded(expanded === g.key ? null : g.key)}
               >
@@ -150,10 +139,18 @@ export function ChallengeLibrary({ owner, songs, marks, preview, onSelect }: Pro
         Page {p} of {count} · {total} results
       </span>
       <div className="flex gap-4">
-        <button disabled={p <= 1} onClick={() => change(p - 1)}>
+        <button
+          className="cursor-pointer disabled:cursor-not-allowed"
+          disabled={p <= 1}
+          onClick={() => change(p - 1)}
+        >
           Previous
         </button>
-        <button disabled={p >= count} onClick={() => change(p + 1)}>
+        <button
+          className="cursor-pointer disabled:cursor-not-allowed"
+          disabled={p >= count}
+          onClick={() => change(p + 1)}
+        >
           Next
         </button>
       </div>
@@ -171,7 +168,7 @@ export function ChallengeLibrary({ owner, songs, marks, preview, onSelect }: Pro
             role="tab"
             aria-selected={tab === t}
             key={t}
-            className={`pb-3 ${tab === t ? 'border-b-2 border-amber-600 font-medium' : ''}`}
+            className={`cursor-pointer pb-3 disabled:cursor-not-allowed ${tab === t ? 'border-b-2 border-amber-600 font-medium' : ''}`}
             onClick={() => setTab(t)}
           >
             {t}
@@ -185,70 +182,31 @@ export function ChallengeLibrary({ owner, songs, marks, preview, onSelect }: Pro
       )}
       {tab === 'All Songs' ? (
         <>
-          {groups[0] && (
-            <section className="space-y-3">
-              <h3 className="text-lg font-medium">Continue Practicing</h3>
-              {card(groups[0], false)}
-            </section>
-          )}
           <section className="space-y-3">
-            <h3 className="text-lg font-medium">Featured Songs</h3>
-            <div className="grid gap-4 md:grid-cols-3">
-              {songs.slice(0, 3).map((s) => (
-                <article
-                  key={s.id}
-                  className="space-y-3 rounded-xl border border-amber-100 bg-white p-4"
-                >
-                  <h4 className="font-medium">{s.title}</h4>
-                  <p className="text-sm text-gray-500">
-                    {s.composer} · {formatTime(s.duration)}
-                  </p>
-                  {actions(s)}
-                </article>
-              ))}
-            </div>
+            <h3 className="text-lg font-medium">Continue challenge</h3>
+            {groups[0] ? (
+              card(groups[0], false)
+            ) : (
+              <div
+                role="status"
+                className="rounded-xl border border-amber-100 bg-white p-5 text-sm text-gray-500"
+              >
+                {loading
+                  ? 'Loading your most recent challenge…'
+                  : error
+                    ? 'Unable to load your most recent challenge. Please try again later.'
+                    : 'Your most recent challenge will appear here.'}
+              </div>
+            )}
           </section>
-          <section className="space-y-3">
-            <h3 className="text-lg font-medium">All Songs</h3>
-            <input
-              aria-label="Search songs"
-              placeholder="Search Song Title, Composer or Segment Title"
-              className="w-full rounded-lg border border-amber-200 bg-white p-3"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value)
-                setPage(1)
-              }}
-            />
-            <div className="flex flex-wrap gap-4">
-              {['All', 'Favorites', 'Not Tried', 'Challenged'].map((f) => (
-                <button
-                  key={f}
-                  aria-pressed={filter === f}
-                  className={filter === f ? 'font-semibold text-amber-800' : 'text-gray-600'}
-                  onClick={() => {
-                    setFilter(f)
-                    setPage(1)
-                  }}
-                >
-                  {f}
-                  {f === 'Favorites' ? ` (${marks.marks.size})` : ''}
-                </button>
-              ))}
-            </div>
-            <div className="overflow-hidden rounded-xl border border-amber-100 bg-white">
-              <SegmentTable
-                songs={catalog.slice((current - 1) * 10, current * 10)}
-                onSelect={onSelect}
-                marks={marks}
-                preview={preview}
-              />
-              {!catalog.length && (
-                <p className="p-6 text-center text-gray-500">No matching songs.</p>
-              )}
-            </div>
-            {paginate(current, pages, catalog.length, setPage)}
-          </section>
+          <SongDiscovery
+            compact
+            songs={songs}
+            marks={marks}
+            preview={preview}
+            onSelect={onSelect}
+            challengedIds={tried}
+          />
         </>
       ) : (
         <>
@@ -268,6 +226,7 @@ export function ChallengeLibrary({ owner, songs, marks, preview, onSelect }: Pro
             <div className="flex flex-wrap gap-3">
               {['All', 'In Progress', 'Completed', 'Succeeded'].map((f) => (
                 <button
+                  className="cursor-pointer disabled:cursor-not-allowed"
                   key={f}
                   aria-pressed={historyFilter === f}
                   onClick={() => {
@@ -280,6 +239,7 @@ export function ChallengeLibrary({ owner, songs, marks, preview, onSelect }: Pro
               ))}
             </div>
             <select
+              className="cursor-pointer disabled:cursor-not-allowed"
               aria-label="Sort history"
               value={sort}
               onChange={(e) => {

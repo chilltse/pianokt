@@ -1,10 +1,10 @@
-import { useCatalogStatus } from '@/features/data/library'
+import { useFullSongCatalog, useCatalogStatus } from '@/features/data/library'
 import type { SongMetadata } from '@/types'
 import { formatTime, getKey } from '@/utils'
 import { Heart, LoaderCircle, Pause, Play, RotateCcw } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { useSegmentMarks } from './hooks'
-import { searchSegments } from './model'
+import { groupSongs, searchSegments } from './model'
 import { useSegmentPreview } from './preview'
 
 export { useSegmentPreview } from './preview'
@@ -24,7 +24,7 @@ type Preview = ReturnType<typeof useSegmentPreview>
 type Marks = ReturnType<typeof useSegmentMarks>
 export function SegmentPreviewButton({ song, preview }: { song: SongMetadata; preview: Preview }) {
   const state =
-    preview.state.id === getKey(song.source === 'builtin' ? song.segment_id! : song.id, song.source)
+    preview.state.id === getKey(song.id, song.source)
       ? preview.state
       : null
   const label =
@@ -49,7 +49,7 @@ export function SegmentPreviewButton({ song, preview }: { song: SongMetadata; pr
       aria-label={`${label} ${song.title}`}
       title={state?.error || label}
       disabled={label === 'Loading'}
-      className="rounded p-2 hover:bg-amber-100 disabled:opacity-50"
+      className="cursor-pointer rounded p-2 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
       onClick={(e) => {
         e.stopPropagation()
         void preview.toggle(song)
@@ -70,7 +70,7 @@ export function SegmentMarkButton({ song, marks }: { song: SongMetadata; marks: 
       aria-pressed={marked}
       aria-busy={saving}
       disabled={!!marks.busy || (!!marks.userId && marks.isLoading)}
-      className="rounded p-2 text-rose-500 disabled:opacity-60"
+      className="cursor-pointer rounded p-2 text-rose-500 disabled:cursor-not-allowed disabled:opacity-60"
       onClick={(e) => {
         e.stopPropagation()
         void marks.toggle(song.segment_id!)
@@ -109,12 +109,12 @@ export function SegmentTable({
         {songs.map((song) => (
           <tr
             key={getKey(song.segment_id ?? song.id, song.source)}
-            className="border-t border-amber-50 hover:bg-amber-50/50"
+            className="cursor-pointer border-t border-amber-50 hover:bg-amber-50/50"
             onClick={() => onSelect(song)}
           >
             <td className="p-3">
               <button
-                className="w-full text-left font-medium break-words"
+                className="w-full cursor-pointer text-left font-medium break-words disabled:cursor-not-allowed"
                 onClick={(e) => {
                   e.stopPropagation()
                   onSelect(song)
@@ -139,29 +139,122 @@ export function SegmentTable({
     </table>
   )
 }
-export function SongDiscovery({
+export function SongTree({
   songs,
   onSelect,
   preview,
   marks,
+  challenge = false,
 }: {
   songs: SongMetadata[]
   onSelect: (song: SongMetadata) => void
   preview: Preview
   marks: Marks
+  challenge?: boolean
+}) {
+  const fullCatalog = useFullSongCatalog()
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  return (
+    <div>
+      {groupSongs(songs).map(({ id, parts }) => (
+        <section key={id} className="border-b border-amber-100">
+          <button
+            type="button"
+            aria-expanded={expanded.has(id)}
+            className="flex w-full cursor-pointer items-center gap-3 p-4 text-left hover:bg-amber-50/50"
+            onClick={() =>
+              setExpanded((previous) => {
+                const next = new Set(previous)
+                next.has(id) ? next.delete(id) : next.add(id)
+                return next
+              })
+            }
+          >
+            <span aria-hidden>{expanded.has(id) ? '▾' : '▸'}</span>
+            <span>
+              <span className="block font-medium">{parts[0].song_title ?? parts[0].title}</span>
+              <span className="text-xs text-gray-500">
+                {parts[0].composer} · {parts.length} {challenge ? 'challenges' : 'parts'}
+              </span>
+            </span>
+          </button>
+          {expanded.has(id) && (
+            <div className="pl-4 sm:pl-8">
+              {!challenge && (() => {
+              const full = fullCatalog.data?.find(song => song.song_id === id)
+              return full ? <div className="flex items-center justify-between border-t border-amber-50 p-3 text-sm"><button className="cursor-pointer" onClick={() => onSelect(full)}>Entire Song</button><div className="flex items-center gap-3"><span>{formatTime(full.duration)}</span><SegmentPreviewButton song={full} preview={preview}/></div></div> : <div className="flex justify-between border-t border-amber-50 p-3 text-sm text-gray-500"><span>Entire Song</span><span>{fullCatalog.isLoading ? 'Loading…' : fullCatalog.error ? 'Unable to load' : 'Unavailable'}</span></div>
+            })()}
+            <SegmentTable
+                songs={parts.map((part) => ({
+                  ...part,
+                  title: part.segment_title || `Part ${part.segment_index}`,
+                }))}
+                onSelect={onSelect}
+                preview={preview}
+                marks={marks}
+              />
+            </div>
+          )}
+        </section>
+      ))}
+    </div>
+  )
+}
+
+export function RecommendationPlaceholder() {
+  return (
+    <SongSection title="Recommended for You">
+      <p className="p-4 text-sm text-gray-500">Personalized recommendations coming soon.</p>
+    </SongSection>
+  )
+}
+
+export function SongDiscovery({
+  songs,
+  onSelect,
+  preview,
+  marks,
+  compact = false,
+  challengedIds,
+}: {
+  songs: SongMetadata[]
+  onSelect: (song: SongMetadata) => void
+  preview: Preview
+  marks: Marks
+  compact?: boolean
+  challengedIds?: Set<string | undefined>
 }) {
   const catalog = useCatalogStatus()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
-  const filtered = searchSegments(songs, search)
-  const pages = Math.max(1, Math.ceil(filtered.length / 10))
+  const [filter, setFilter] = useState('All')
+  const filtered = searchSegments(songs, search).filter(
+    (song) =>
+      !compact ||
+      filter === 'All' ||
+      (filter === 'Favorites' && marks.marks.has(song.segment_id!)) ||
+      (filter === 'Challenged' && challengedIds?.has(song.segment_id)) ||
+      (filter === 'Not Tried' && !challengedIds?.has(song.segment_id)),
+  )
+  const grouped = groupSongs(filtered)
+  const pages = Math.max(1, Math.ceil((compact ? grouped.length : filtered.length) / 10))
   const current = Math.min(page, pages)
   const marked = (catalog.data ?? songs).filter(
     (s) => s.source === 'builtin' && !!s.segment_id && marks.marks.has(s.segment_id),
   )
   const table = (rows: SongMetadata[], empty: string) =>
     rows.length ? (
-      <SegmentTable songs={rows} onSelect={onSelect} preview={preview} marks={marks} />
+      compact ? (
+        <SongTree
+          songs={rows}
+          onSelect={onSelect}
+          preview={preview}
+          marks={marks}
+          challenge={!!challengedIds}
+        />
+      ) : (
+        <SegmentTable songs={rows} onSelect={onSelect} preview={preview} marks={marks} />
+      )
     ) : (
       <p className="p-8 text-center text-sm text-gray-500">{empty}</p>
     )
@@ -175,24 +268,24 @@ export function SongDiscovery({
       {preview.state.status === 'error' && (
         <p role="alert">{preview.state.error}. Use Retry on the segment to try again.</p>
       )}
-      <SongSection title="Recommended Songs">
-        <p className="p-4 text-sm text-gray-500">Personalized recommendations coming soon.</p>
-      </SongSection>
-      <SongSection title="Marked Songs">
-        {marks.error ? (
-          <p role="alert" className="p-4">
-            Unable to load marks.{' '}
-            <button className="underline" onClick={() => void marks.mutate()}>
-              Retry
-            </button>
-          </p>
-        ) : marks.isLoading ? (
-          <p className="p-4">Loading…</p>
-        ) : (
-          table(marked, marks.userId ? 'No marked segments yet.' : 'Sign in to mark segments.')
-        )}
-      </SongSection>
-      <SongSection title="All Songs">
+      <RecommendationPlaceholder />
+      {!compact && (
+        <SongSection title="Marked Songs">
+          {marks.error ? (
+            <p role="alert" className="p-4">
+              Unable to load marks.{' '}
+              <button className="cursor-pointer underline" onClick={() => void marks.mutate()}>
+                Retry
+              </button>
+            </p>
+          ) : marks.isLoading ? (
+            <p className="p-4">Loading…</p>
+          ) : (
+            table(marked, marks.userId ? 'No marked segments yet.' : 'Sign in to mark segments.')
+          )}
+        </SongSection>
+      )}
+      <SongSection title={challengedIds ? 'All Challenges' : 'All Songs'}>
         <div className="p-3">
           <input
             aria-label="Search songs"
@@ -205,31 +298,58 @@ export function SongDiscovery({
             }}
           />
         </div>
+        {compact && (
+          <div className="flex gap-4 px-3 pb-3 text-sm">
+            {(challengedIds
+              ? ['All', 'Favorites', 'Not Tried', 'Challenged']
+              : ['All', 'Favorites']
+            ).map((choice) => (
+              <button
+                key={choice}
+                type="button"
+                aria-pressed={filter === choice}
+                className={`cursor-pointer ${filter === choice ? 'font-semibold text-amber-800' : 'text-gray-600'}`}
+                onClick={() => {
+                  setFilter(choice)
+                  setPage(1)
+                }}
+              >
+                {choice === 'Favorites'
+                  ? `Favorites (${songs.filter((s) => marks.marks.has(s.segment_id!)).length})`
+                  : choice}
+              </button>
+            ))}
+          </div>
+        )}
         {catalog.error && (
           <p role="status" className="p-3">
             曲库暂时无法同步，已缓存曲目仍可使用。
-            <button onClick={() => void catalog.mutate()}>重试</button>
+            <button className="cursor-pointer" onClick={() => void catalog.mutate()}>
+              重试
+            </button>
           </p>
         )}
         {table(
-          filtered.slice((current - 1) * 10, current * 10),
+          compact
+            ? grouped.slice((current - 1) * 10, current * 10).flatMap((group) => group.parts)
+            : filtered.slice((current - 1) * 10, current * 10),
           catalog.isLoading ? 'Loading…' : 'No results',
         )}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-amber-100 p-3 text-sm">
           <span>
-            Page {current} of {pages} · {filtered.length} results
+            Page {current} of {pages} · {compact ? grouped.length : filtered.length} results
           </span>
           <div className="flex gap-4">
             <button
               disabled={current <= 1}
-              className="disabled:opacity-40"
+              className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
               onClick={() => setPage(current - 1)}
             >
               Previous
             </button>
             <button
               disabled={current >= pages}
-              className="disabled:opacity-40"
+              className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
               onClick={() => setPage(current + 1)}
             >
               Next

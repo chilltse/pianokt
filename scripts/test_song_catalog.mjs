@@ -63,7 +63,8 @@ assert.equal((await offline.cached())[0].id, '80000000-0000-0000-0000-0000000000
 await assert.rejects(offline.refresh(), /unavailable/)
 assert.equal((await offline.cached())[0].id, '80000000-0000-0000-0000-000000000001')
 console.log('Song catalog/cache tests passed (directory dedupe, offline, persistence adapter, SHA, versioning, concurrency, quota, cancellation, segment identity)')
-const history = load('src/features/challenge-history/api.ts', {})
+const history = load('src/features/challenge-history/api.ts', {
+  '../../../shared/challenge-scoring.json': { default: JSON.parse(readFileSync('shared/challenge-scoring.json','utf8')) },})
 const best = history.getBestAccuracyPerSong([
   { song_source: 'builtin', song_id: '70000000-0000-0000-0000-000000000001', segment_id: '80000000-0000-0000-0000-000000000001', score_source: 'aligned', accuracy_pct: 80 },
   { song_source: 'builtin', song_id: '70000000-0000-0000-0000-000000000001', segment_id: '80000000-0000-0000-0000-000000000001', score_source: 'aligned', accuracy_pct: 90 },

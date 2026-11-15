@@ -1,3 +1,4 @@
+import challengeScoring from '../../../shared/challenge-scoring.json'
 import { supabase } from '@/features/auth/supabase'
 import type {
   ChallengeRecordingRow,
@@ -132,7 +133,7 @@ export async function listUserPlayLogs(): Promise<{ data: UserPlayLogRow[] } | {
   }
 }
 
-const CHALLENGE_SUCCESS_PCT = 90
+export const CHALLENGE_SUCCESS_PCT = challengeScoring.success_threshold_pct
 
 /**
  * 判断一次 Challenge 是否成功。
@@ -143,7 +144,7 @@ const CHALLENGE_SUCCESS_PCT = 90
  * ---------------- × 100
  * 所有 notes
  *
- * 正确率大于或等于 90% 时，
+ * 正确率大于或等于 80% 时，
  * 认为本次挑战成功。
  */
 export function isChallengeSuccess(accuracyPct: number): boolean {

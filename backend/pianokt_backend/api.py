@@ -301,7 +301,7 @@ from .product_results import ProductResult
 def save_product_result(body: ProductResult, uid=Depends(user)):
     from .song_identity import check_catalog_identity
     payload = body.model_dump(mode='json')
-    payload['is_succeeded'] = body.is_completed and body.frontend_note_accuracy is not None and body.frontend_note_accuracy >= .9
+    payload['is_succeeded'] = body.is_completed and body.frontend_note_accuracy is not None and body.frontend_note_accuracy >= .8
     environment = recording_environment()
     with connect() as c:
         check_catalog_identity(c, body)

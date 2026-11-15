@@ -1,3 +1,4 @@
+import { CHALLENGE_SUCCESS_PCT } from '@/features/challenge-history/api'
 import { ChevronLeft, ChevronRight, Trophy } from 'lucide-react'
 import { useState } from 'react'
 
@@ -53,15 +54,15 @@ function PageChart({ rows }: { rows: { attempt: ProductAttempt; number: number }
         role="img"
         aria-label={`Completion and accuracy for attempts ${chronological[0]?.number} through ${chronological.at(-1)?.number}`}
       >
-        {[0, 50, 90, 100].map((tick) => (
+        {[0, 50, CHALLENGE_SUCCESS_PCT, 100].map((tick) => (
           <g key={tick}>
             <line
               x1={40}
               x2={650}
               y1={y(tick)}
               y2={y(tick)}
-              stroke={tick === 90 ? '#8ab69a' : '#e7e5e4'}
-              strokeDasharray={tick === 90 ? '4 4' : undefined}
+              stroke={tick === CHALLENGE_SUCCESS_PCT ? '#8ab69a' : '#e7e5e4'}
+              strokeDasharray={tick === CHALLENGE_SUCCESS_PCT ? '4 4' : undefined}
             />
             <text x={34} y={y(tick) + 4} textAnchor="end" fontSize={11} fill="#78716c">
               {tick}%
@@ -162,7 +163,7 @@ export function ChallengeHistoryDetails({ attempts }: { attempts: ProductAttempt
           type="button"
           onClick={() => setPage(page - 1)}
           disabled={page <= 1}
-          className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-white px-3 py-2 disabled:opacity-40"
+          className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-amber-200 bg-white px-3 py-2 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <ChevronLeft size={14} />
           Newer
@@ -171,7 +172,7 @@ export function ChallengeHistoryDetails({ attempts }: { attempts: ProductAttempt
           type="button"
           onClick={() => setPage(page + 1)}
           disabled={page >= pages}
-          className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-white px-3 py-2 disabled:opacity-40"
+          className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-amber-200 bg-white px-3 py-2 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Older
           <ChevronRight size={14} />

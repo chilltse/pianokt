@@ -49,7 +49,7 @@ export default function ChallengeSongsPage() {
               <h2 className="text-2xl font-semibold text-gray-900">Take a challenge</h2>
               <Sizer height={4} />
               <p className="text-sm text-gray-600">
-                Challenge a song to the end. With accuracy ≥ 90% seen as success.
+                Challenge a song to the end. With accuracy ≥ 80% seen as success.
               </p>
             </div>
             <img
