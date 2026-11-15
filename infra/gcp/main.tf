@@ -9,7 +9,6 @@ terraform {
 variable "project_id" { type = string }
 variable "region" { type = string }
 variable "image" { type = string }
-variable "spark_image" { type = string }
 variable "frontend_origins" {
   description = "Allowed browser origins for API and GCS CORS"
   type        = list(string)
@@ -43,11 +42,7 @@ variable "source_environment" {
     error_message = "Use a known server-owned environment."
   }
 }
-variable "lake_pipeline_paused" {
-  type        = bool
-  default     = true
-  description = "Direct Export is the default; explicitly opt in to scheduled lake materialization."
-}
+
 locals {
   browser_origins = distinct(var.frontend_origins)
 }
@@ -71,16 +66,17 @@ resource "google_artifact_registry_repository" "images" {
   depends_on    = [google_project_service.enabled]
 }
 resource "google_service_account" "runtime" {
-  for_each   = toset(["api", "worker", "relay", "pipeline", "scheduler", "push"])
+  for_each   = toset(["api", "worker", "relay", "scheduler", "push"])
   account_id = "pianokt-${each.value}"
 }
 resource "google_storage_bucket" "data" {
-  for_each                    = toset(["raw", "lake", "checkpoint"])
+  for_each                    = toset(["raw"])
   name                        = "${var.project_id}-pianokt-${each.value}"
   location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
   force_destroy               = false
+  lifecycle { prevent_destroy = true }
   dynamic "cors" {
     for_each = each.key == "raw" ? [1] : []
     content {
@@ -92,30 +88,33 @@ resource "google_storage_bucket" "data" {
   }
 }
 resource "google_storage_bucket_iam_member" "raw_read" {
-  for_each = toset(["api", "worker", "pipeline"])
+  for_each = toset(["api", "worker"])
   bucket   = google_storage_bucket.data["raw"].name
   role     = "roles/storage.objectViewer"
   member   = "serviceAccount:${google_service_account.runtime[each.value].email}"
+  condition {
+    title      = "v3-namespace"
+    expression = "resource.name.startsWith('projects/_/buckets/${google_storage_bucket.data["raw"].name}/objects/raw/recordings/') || resource.name.startsWith('projects/_/buckets/${google_storage_bucket.data["raw"].name}/objects/silver/alignment/')"
+  }
 }
 resource "google_storage_bucket_iam_member" "raw_create" {
   for_each = toset(["api", "worker"])
   bucket   = google_storage_bucket.data["raw"].name
   role     = "roles/storage.objectCreator"
   member   = "serviceAccount:${google_service_account.runtime[each.value].email}"
+  condition {
+    title      = "v3-namespace"
+    expression = "resource.name.startsWith('projects/_/buckets/${google_storage_bucket.data["raw"].name}/objects/${each.value == "api" ? "raw/recordings/" : "silver/alignment/"}')"
+  }
 }
-resource "google_storage_bucket_iam_member" "tables" {
-  for_each = toset(["lake", "checkpoint"])
-  bucket   = google_storage_bucket.data[each.value].name
-  role     = "roles/storage.objectAdmin"
-  member   = "serviceAccount:${google_service_account.runtime["pipeline"].email}"
-}
+
 resource "google_service_account_iam_member" "sign" {
   service_account_id = google_service_account.runtime["api"].name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${google_service_account.runtime["api"].email}"
 }
 resource "google_secret_manager_secret_iam_member" "database" {
-  for_each  = toset(["api", "worker", "relay", "pipeline"])
+  for_each  = toset(["api", "worker", "relay"])
   secret_id = var.database_secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.runtime[each.value].email}"
@@ -152,6 +151,10 @@ resource "google_storage_bucket_iam_member" "archive_create" {
   bucket = google_storage_bucket.data["raw"].name
   role   = "roles/storage.objectCreator"
   member = "serviceAccount:${google_project_service_identity.pubsub.email}"
+  condition {
+    title      = "v3-namespace"
+    expression = "resource.name.startsWith('projects/_/buckets/${google_storage_bucket.data["raw"].name}/objects/raw/events/')"
+  }
 }
 resource "google_storage_bucket_iam_member" "archive_bucket" {
   bucket = google_storage_bucket.data["raw"].name
@@ -164,7 +167,7 @@ resource "google_pubsub_subscription" "archive" {
   expiration_policy { ttl = "" }
   cloud_storage_config {
     bucket          = google_storage_bucket.data["raw"].name
-    filename_prefix = "events/"
+    filename_prefix = "raw/events/"
     filename_suffix = ".jsonl"
     max_duration    = "60s"
     # Text output is the default when avro_config is omitted.
@@ -199,7 +202,7 @@ resource "google_cloud_run_v2_service" "app" {
         }
       }
       dynamic "env" {
-        for_each = merge({ PIANOKT_ENV = var.source_environment, RAW_ROOT = "gs://${google_storage_bucket.data["raw"].name}", SUPABASE_URL = var.supabase_url, SUPABASE_ANON_KEY = var.supabase_anon_key, FRONTEND_ORIGINS = join(",", local.browser_origins), SIGNING_SERVICE_ACCOUNT = google_service_account.runtime["api"].email }, each.value == "api" ? {
+        for_each = merge({ PIANOKT_ENV = var.source_environment, DATA_ROOT = "gs://${google_storage_bucket.data["raw"].name}", SUPABASE_URL = var.supabase_url, SUPABASE_ANON_KEY = var.supabase_anon_key, FRONTEND_ORIGINS = join(",", local.browser_origins), SIGNING_SERVICE_ACCOUNT = google_service_account.runtime["api"].email }, each.value == "api" ? {
           EVENT_TOPIC             = google_pubsub_topic.events.id
           DIRECT_PUBSUB_ENABLED   = tostring(var.direct_pubsub_enabled)
           DIRECT_PUBSUB_TIMEOUT_S = tostring(var.direct_pubsub_timeout_s)
@@ -260,7 +263,7 @@ resource "google_pubsub_subscription_iam_member" "dead_subscribe" {
   member       = "serviceAccount:${google_project_service_identity.pubsub.email}"
 }
 resource "google_cloud_run_v2_job" "job" {
-  for_each            = toset(["relay", "pipeline"])
+  for_each            = toset(["relay"])
   name                = "pianokt-${each.value}"
   location            = var.region
   deletion_protection = true
@@ -272,11 +275,11 @@ resource "google_cloud_run_v2_job" "job" {
       timeout         = "1800s"
       max_retries     = 2
       containers {
-        image   = each.value == "pipeline" ? var.spark_image : var.image
+        image   = var.image
         command = ["pianokt-data"]
         args    = [each.value]
         resources {
-          limits = each.value == "relay" ? { cpu = "1", memory = "1Gi" } : { cpu = "2", memory = "4Gi" }
+          limits = { cpu = "1", memory = "1Gi" }
         }
         env {
           name = "DATABASE_URL"
@@ -288,7 +291,7 @@ resource "google_cloud_run_v2_job" "job" {
           }
         }
         dynamic "env" {
-          for_each = { PIANOKT_ENV = var.source_environment, RAW_ROOT = "gs://${google_storage_bucket.data["raw"].name}", LAKE_ROOT = "gs://${google_storage_bucket.data["lake"].name}", CHECKPOINT_ROOT = "gs://${google_storage_bucket.data["checkpoint"].name}", EVENT_TOPIC = google_pubsub_topic.events.id, ENABLE_SPARK_EVENTS = "1" }
+          for_each = { PIANOKT_ENV = var.source_environment, EVENT_TOPIC = google_pubsub_topic.events.id }
           content {
             name  = env.key
             value = env.value
@@ -309,9 +312,9 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler" {
 resource "google_cloud_scheduler_job" "job" {
   for_each  = google_cloud_run_v2_job.job
   name      = "pianokt-${each.key}"
-  schedule  = each.key == "relay" ? var.relay_schedule : var.pipeline_schedule
+  schedule  = var.relay_schedule
   time_zone = "Asia/Tokyo"
-  paused    = var.schedules_paused || (each.key == "pipeline" && var.lake_pipeline_paused)
+  paused    = var.schedules_paused
   http_target {
     uri         = "https://run.googleapis.com/v2/${each.value.id}:run"
     http_method = "POST"
@@ -325,9 +328,4 @@ variable "relay_schedule" {
   type        = string
   default     = "*/15 * * * *"
   description = "Low-frequency compensation after direct dispatch is verified. Override to every minute during rollout or rollback."
-}
-variable "pipeline_schedule" {
-  type        = string
-  default     = "0 0,11 * * *"
-  description = "Lakehouse catch-up schedule (Asia/Tokyo)."
 }

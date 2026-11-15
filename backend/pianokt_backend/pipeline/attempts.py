@@ -29,6 +29,13 @@ def read_context(c, cutoff, environment='production'):
         where a.started_at<%s and e.received_at<%s and e.occurred_at<%s
           and a.source_environment=%s and v.source_environment=%s
         order by e.attempt_id,e.event_sequence''', (cutoff, cutoff, cutoff, environment, environment)).fetchall()
+    exclusions = c.execute('select scope,identity from public.piano_data_exclusions where source_environment=%s', (environment,)).fetchall()
+    excluded = {(e['scope'], e['identity']) for e in exclusions}
+    attempts = [a for a in attempts if not any((scope, str(value)) in excluded for scope,value in
+                [('attempt', a['attempt_id']), ('learner', a['learner_key']), ('song', a.get('song_id')), ('segment', a.get('segment_id'))])]
+    allowed = {str(a['attempt_id']) for a in attempts}
+    visits = [v for v in visits if ('learner', str(v['learner_key'])) not in excluded]
+    events = [e for e in events if str(e['attempt_id']) in allowed]
     return {'visits': visits, 'attempts': attempts, 'events': events, 'source_environment': environment}
 
 
@@ -137,7 +144,6 @@ def build_record(result, context, visit_index, attempt_index):
 def export_attempts(objects, tables, cutoff, output_prefix, context, run_selection=None, environment='production'):
     context = filter_context(context, environment)
     boundary = utc(cutoff)
-    prefix = output_prefix.rstrip('/')
     visits = [v for v in context['visits'] if utc(v['started_at']) < boundary and utc(v.get('received_at', v['started_at'])) < boundary]
     attempts = [a for a in context['attempts'] if utc(a['started_at']) < boundary and utc(a.get('received_at', a['started_at'])) < boundary]
     visits.sort(key=lambda v: (str(v['learner_key']), utc(v['started_at']), str(v['id'])))
@@ -181,11 +187,11 @@ def export_attempts(objects, tables, cutoff, output_prefix, context, run_selecti
     events = [{k: v for k, v in row.items() if k != 'user_id'} for row in context.get('events', [])
               if str(row['attempt_id']) in by_id and utc(row['occurred_at']) < boundary and utc(row.get('received_at', row['occurred_at'])) < boundary]
     snapshots = json_value(dict(visits=visit_rows, attempts=attempt_rows, events=events, index_map=mappings))
-    version = stable_id('attempt-v1.3', environment, utc(cutoff).isoformat(), records, snapshots)
+    version = stable_id('attempt-v3', environment, utc(cutoff).isoformat(), records, snapshots, getattr(tables,'selection',{}), run_selection)
     manifest = dict(dataset_version=version, schema_version='1.3', source_environment=environment,
                     outcome_semantics='exit_status is client-reported; completion_reason is transport terminal; aligned grade is separate', cutoff=utc(cutoff).isoformat(),
                     count=len(records), skipped=dict(skipped),
-                    source='postgres-ready-v1' if hasattr(tables,'results') else 'lake-completed-v1',
+                    source='postgres-registry-v3',
                     kc_labeler_version=kc_version, quality_policy='quality-valid-and-not-waiting', ordering='Per learner: UTC started_at; visit ID, within-visit attempt sequence, attempt ID break ties. Indices assigned before quality filtering.',
                     context_files=['visits.json', 'attempt_metadata.json', 'attempt_events.json', 'index_map.json'],
                     context_semantics='Metadata is captured at export time; cutoff filters accepted history and labels, not historical visit liveness. Preserve this immutable snapshot for reproduction.')
@@ -193,4 +199,12 @@ def export_attempts(objects, tables, cutoff, output_prefix, context, run_selecti
     for filename, key in [('visits.json','visits'),('attempt_metadata.json','attempts'),('attempt_events.json','events'),('index_map.json','index_map')]:
         files[filename]=json.dumps(snapshots[key],sort_keys=True,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode()
     from ..publication import publish_bundle
+    from ..storage_layout import gold_dataset_prefix
+    from .gold import lineage
+    included = {m['attempt_id'] for m in mappings}
+    manifest.update(lineage('attempts', [r for aid,r in selected.items() if aid in included], cutoff, environment, run_selection, skipped))
+    manifest.update(visit_count=len({m['visit_id'] for m in mappings}), event_count=sum(len(r['events_data']['onset_seconds']) for aid,r in selected.items() if aid in included))
+    manifest['source_selection'] = getattr(tables,'selection',manifest['source_selection'])
+    if version in getattr(tables,'withdrawn',()): raise ValueError('Dataset withdrawn')
+    prefix = gold_dataset_prefix('attempts', version, output_prefix)
     return publish_bundle(objects,prefix,files,manifest)

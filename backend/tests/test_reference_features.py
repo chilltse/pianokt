@@ -100,6 +100,8 @@ def test_version_changes_run_and_cache(tmp_path, monkeypatch):
                   observed_end_sec=None, transport_segments_count=None, event_audit_supplied=False))
     assert not _is_current_result(result, row, AlignmentConfig(), current, None, 0, None, None)
     result['kc_labeler_version'] = '1.2.0'
+    result['data_architecture_version'] = '3'
+    result['learner_key'] = str(row.get('learner_key'))
     assert _is_current_result(result, row, AlignmentConfig(), current, None, 0, None, None)
     row.update(song_id='song',metadata=dict(segment_id='segment',segment_index=1,midi_sha256='a'*64))
     assert not _is_current_result(result,row,AlignmentConfig(),current,None,0,None,None)

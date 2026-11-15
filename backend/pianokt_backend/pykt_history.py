@@ -25,7 +25,7 @@ def development(environment):
 
 def student_identity(environment, learner_key):
     development(environment)
-    return f'pianokt:{environment}:{UUID(str(learner_key))}'
+    return f'pianokt:v3:{environment}:{UUID(str(learner_key))}'
 
 
 def read_snapshot(connection, objects, uid, environment):
@@ -37,8 +37,13 @@ def read_snapshot(connection, objects, uid, environment):
     key = str(learner['learner_key'])
     rows = connection.execute('''select p.id as attempt_id,p.learner_key,p.alignment_run_id,p.result_key,
         p.reference_hash,p.performance_hash,p.result_digest,p.song_id,p.segment_id,p.segment_index,p.midi_sha256,
-        p.result_committed_at,p.summary,p.source_environment,p.metadata
-        from public.piano_attempts p where p.user_id=%s and p.learner_key=%s
+        p.result_committed_at,p.summary,p.source_environment,p.metadata,p.data_architecture_version,
+        r.alignment_version,r.matcher_version,r.reference_grouping_version,r.kc_labeler_version,r.telemetry_hash
+        from public.piano_attempts p join public.piano_alignment_runs r
+        on r.attempt_id=p.id and r.alignment_run_id=p.alignment_run_id and r.result_digest=p.result_digest
+        and r.processing_purpose='online' and r.data_architecture_version='3'
+        and r.result_key=p.result_key and r.source_environment=p.source_environment and r.learner_key=p.learner_key
+        where p.data_architecture_version='3' and p.user_id=%s and p.learner_key=%s
         and p.source_environment=%s and p.status='READY' order by p.id''', (uid, key, environment)).fetchall()
     context = connection.execute('''select a.*,k.learner_key,l.time_playing,l.is_played_in_full
         from public.student_attempts a join public.piano_learner_keys k on k.user_id=a.user_id

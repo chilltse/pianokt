@@ -1,3 +1,5 @@
+> **架构历史资料**：涉及旧存储路径、配置和 Lakehouse 的步骤已退役。当前运行契约见 [Data Architecture V3](DATA_ARCHITECTURE_V3.md)，不要执行本文旧部署或导出命令。
+
 # PianoKT 数据架构精简：v2 实施结果与决策
 
 2026-11-05 最新架构：异步 finalize v3 + migration 017，详见 [异步接收与部署](ASYNC_FINALIZATION_ZH.md)。此前性能优化见 [计时说明](UPLOAD_PERFORMANCE_ZH.md)。

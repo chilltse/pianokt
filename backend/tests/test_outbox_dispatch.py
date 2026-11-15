@@ -55,7 +55,8 @@ def delivery(event_db, monkeypatch):
 
 
 def finalize(client, body=None):
-    return client.post(f'/attempts/{A}/finalize', json=(body or full_packet()).model_dump(mode='json'))
+    from v3_test_helpers import finalize_wire
+    return client.post(f'/attempts/{A}/finalize', json=finalize_wire(body or full_packet()))
 
 
 def test_commit_then_publish_wire_contract_and_strict_retry(delivery):

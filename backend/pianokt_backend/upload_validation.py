@@ -31,6 +31,12 @@ def read_verified(store, row, kind, maximum, generations):
     return data
 
 def validate_files(store, row, directory):
+    if row.get('data_architecture_version') == '3':
+        from .storage_layout import raw_recording_key, raw_reference_key, raw_telemetry_key
+        for kind, make_key in [('performance', raw_recording_key), ('reference', raw_reference_key), ('performance_events', raw_telemetry_key)]:
+            if kind == 'performance_events' and not row.get(kind + '_key'): continue
+            if row[kind + '_key'] != make_key(row['learner_key'], row['id']):
+                raise InvalidUpload('Raw owner/attempt namespace mismatch: ' + kind)
     generations = {}
     files = {}
     for kind in ('performance', 'reference'):

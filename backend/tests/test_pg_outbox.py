@@ -67,7 +67,7 @@ def test_duplicate_worker_ack_does_not_repeat_validation_or_increment_counter(co
     _, connect = committed
     entered, release = Event(), Event()
     calls = []
-    monkeypatch.setenv('RAW_ROOT', '/unused')
+    monkeypatch.setenv('DATA_ROOT', '/unused')
     monkeypatch.setattr(worker, 'Objects', lambda *args: object())
     def validate(*args):
         calls.append('validate')

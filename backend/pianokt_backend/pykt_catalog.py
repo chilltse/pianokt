@@ -1,4 +1,4 @@
-"""Published Supabase piano-midi candidates; never download catalog MIDI from RAW_ROOT."""
+"""Published Supabase piano-midi candidates; never download catalog MIDI from DATA_ROOT."""
 from collections import Counter
 from hashlib import sha256
 from pathlib import Path

@@ -14,23 +14,7 @@ def eligible_results(objects, tables, cutoff, run_selection=None, environment='p
     """An explicit selection maps attempt ID to immutable run ID; no latest-wins."""
     if tables is None:
         raise ValueError('A committed result source is required')
-    if hasattr(tables, 'results'):
-        yield from tables.results(objects, cutoff, run_selection, environment)
-        return
-    boundary = utc(cutoff)
-    completed = {str(row['event_id']) for row in tables.rows('ops/completed_runs')}
-    seen=set()
-    for key in objects.keys('alignment'):
-        if not key.endswith('/result.json'): continue
-        r = json.loads(objects.read(key))
-        if r.get('source_environment') != environment: continue
-        if r['alignment_run_id'] not in completed: continue
-        if not r.get('alignment_completed_at') or utc(r['alignment_completed_at']) >= boundary: continue
-        if run_selection is not None and run_selection.get(r['attempt_id']) != r['alignment_run_id']: continue
-        seen.add(r['attempt_id'])
-        yield r
-    if run_selection is not None and set(run_selection)-seen:
-        raise ValueError('Selected runs are missing, uncommitted or outside cutoff: '+str(sorted(set(run_selection)-seen)))
+    yield from tables.results(objects, cutoff, run_selection, environment)
 
 
 def rejection(result):

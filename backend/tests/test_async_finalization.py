@@ -23,11 +23,15 @@ def prepare(db, monkeypatch, tmp_path):
             db.execute('rollback')
             raise
     monkeypatch.setattr(worker,'connect',connect)
-    monkeypatch.setenv('RAW_ROOT',str(tmp_path))
+    monkeypatch.setenv('DATA_ROOT',str(tmp_path))
     row=new_upload(db)
     midi=mido.MidiFile(); midi.tracks.append(mido.MidiTrack())
     output=BytesIO(); midi.save(file=output); data=output.getvalue()
-    for kind in ('p','r'): (tmp_path/kind).write_bytes(data)
+    from pianokt_backend.storage_layout import raw_recording_key, raw_reference_key
+    store=Objects(str(tmp_path))
+    keys=[raw_recording_key(row['learner_key'],A),raw_reference_key(row['learner_key'],A)]
+    for key in keys: store.put(key,data)
+    db.execute('update piano_attempts set performance_key=%s,reference_key=%s',tuple(keys))
     db.execute('update piano_attempts set performance_hash=%s,reference_hash=%s',(digest(data),digest(data)))
     commit_finalization(db,row,U,full_packet())
     return db.execute('select * from piano_attempts').fetchone()
@@ -37,13 +41,6 @@ def test_worker_validates_before_alignment_and_then_publishes(db,monkeypatch,tmp
     prepare(db,monkeypatch,tmp_path)
     assert db.execute('select * from get_leaderboard()').fetchall()==[]
     assert db.execute('select * from user_play_logs').fetchall()==[]
-    monkeypatch.setattr(worker,'alignment_run_id',lambda *a:'run')
-    def align(*args,**kwargs):
-        row=db.execute('select * from piano_attempts').fetchone()
-        assert row['validated_at'] is not None and row['status']=='PROCESSING'
-        assert len(db.execute('select * from user_play_logs').fetchall())==1
-        return dict(alignment_run_id='run',notes=[],summary={},diagnostics={'alignment_quality_valid':False})
-    monkeypatch.setattr(worker,'align',align)
     worker.process(A)
     row=db.execute('select * from piano_attempts').fetchone()
     assert row['status']=='READY' and row['validated_at'] and row['result_committed_at']
@@ -54,7 +51,7 @@ def test_worker_validates_before_alignment_and_then_publishes(db,monkeypatch,tmp
 
 def test_invalid_file_is_terminal_and_excluded(db,monkeypatch,tmp_path):
     prepare(db,monkeypatch,tmp_path)
-    (tmp_path/'p').write_bytes(b'wrong')
+    (tmp_path/db.execute('select performance_key from piano_attempts').fetchone()['performance_key']).write_bytes(b'wrong')
     worker.process(A)
     row=db.execute('select * from piano_attempts').fetchone()
     assert row['status']=='INVALID' and row['validated_at'] is None
@@ -66,7 +63,7 @@ def test_invalid_file_is_terminal_and_excluded(db,monkeypatch,tmp_path):
 
 def test_missing_file_retries_and_relay_recovers(db,monkeypatch,tmp_path):
     prepare(db,monkeypatch,tmp_path)
-    (tmp_path/'p').unlink()
+    (tmp_path/db.execute('select performance_key from piano_attempts').fetchone()['performance_key']).unlink()
     with pytest.raises(FileNotFoundError): worker.process(A)
     row=db.execute('select * from piano_attempts').fetchone()
     assert row['status']=='RETRY' and row['validated_at'] is None
@@ -86,8 +83,10 @@ def test_telemetry_monotonic_error_is_permanent(db,monkeypatch,tmp_path):
     payload={'schemaVersion':1,'events':[], 'transportSegments':[
       {'sequence':0,'type':'start','playerSongTime':2,'performanceNowTimestamp':1},
       {'sequence':1,'type':'stop','playerSongTime':1,'performanceNowTimestamp':2}]}
-    data=json.dumps(payload).encode(); (tmp_path/'events').write_bytes(data)
-    db.execute('update piano_attempts set performance_events_key=%s,performance_events_hash=%s,performance_events_count=0',('events',digest(data)))
+    from pianokt_backend.storage_layout import raw_telemetry_key
+    key=raw_telemetry_key(row['learner_key'],A)
+    data=json.dumps(payload).encode(); Objects(str(tmp_path)).put(key,data)
+    db.execute('update piano_attempts set performance_events_key=%s,performance_events_hash=%s,performance_events_count=0',(key,digest(data)))
     worker.process(A)
     row=db.execute('select * from piano_attempts').fetchone()
     assert row['status']=='INVALID' and 'not monotonic' in row['validation_error']
@@ -130,4 +129,4 @@ def test_reference_contract_failure_is_terminal_internal_error(db, monkeypatch, 
     assert row['error_code'] == 'ReferenceGroupingMismatch'
     assert row['validation_error'] is None
     assert row['result_key'] is None
-    assert not list(tmp_path.glob('alignment/*/result.json'))
+    assert not list(tmp_path.glob('silver/alignment/*/result.json'))

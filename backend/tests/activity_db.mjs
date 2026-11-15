@@ -18,7 +18,7 @@ for (const name of [
   '013_visits_and_attempt_activity.sql',
   '014_atomic_attempt_commit.sql',
   '015_direct_export_commit.sql',
-  '016_challenge_event_authority.sql','017_async_finalization.sql','018_song_versions.sql','019_practice_catalog_identity.sql',
+  '016_challenge_event_authority.sql','017_async_finalization.sql','018_song_versions.sql','019_practice_catalog_identity.sql','021_explicit_accuracy_metrics.sql','024_data_architecture_v3.sql',
 ]) {
   await db.exec(await readFile(`supabase/migrations/${name}`, 'utf8'))
 }

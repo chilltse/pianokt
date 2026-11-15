@@ -1,4 +1,4 @@
-# Opt-in only; never schedules exports or alters relay/lake schedules.
+# Opt-in only; never schedules exports or alters relay schedule.
 variable "enable_export_job" {
   type    = bool
   default = false
@@ -18,6 +18,10 @@ resource "google_storage_bucket_iam_member" "export_read" {
   bucket = google_storage_bucket.data["raw"].name
   role   = "roles/storage.objectViewer"
   member = "serviceAccount:${google_service_account.export[0].email}"
+  condition {
+    title      = "silver-and-gold-read"
+    expression = "resource.name.startsWith('projects/_/buckets/${google_storage_bucket.data["raw"].name}/objects/silver/alignment/') || resource.name.startsWith('projects/_/buckets/${google_storage_bucket.data["raw"].name}/objects/gold/')"
+  }
 }
 resource "google_storage_bucket_iam_member" "export_create" {
   count  = var.enable_export_job ? 1 : 0
@@ -25,8 +29,8 @@ resource "google_storage_bucket_iam_member" "export_create" {
   role   = "roles/storage.objectCreator"
   member = "serviceAccount:${google_service_account.export[0].email}"
   condition {
-    title      = "datasets-only"
-    expression = "resource.name.startsWith('projects/_/buckets/${google_storage_bucket.data["raw"].name}/objects/datasets/')"
+    title      = "gold-only"
+    expression = "resource.name.startsWith('projects/_/buckets/${google_storage_bucket.data["raw"].name}/objects/gold/')"
   }
 }
 resource "google_cloud_run_v2_job" "export" {
@@ -48,7 +52,7 @@ resource "google_cloud_run_v2_job" "export" {
         args = ["export-attempts", "--help"]
         resources { limits = { cpu = "2", memory = "4Gi" } }
         env {
-          name  = "RAW_ROOT"
+          name  = "DATA_ROOT"
           value = "gs://${google_storage_bucket.data["raw"].name}"
         }
         env {

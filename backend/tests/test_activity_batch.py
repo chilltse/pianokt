@@ -48,7 +48,8 @@ def test_nine_event_finalize_receipt_sql_count_and_retry(event_db, monkeypatch, 
     new_upload(event_db)
     monkeypatch.setattr(api, 'connect', lambda: transaction(event_db))
     api.app.dependency_overrides[api.user] = lambda: U
-    body = nine_events().model_dump(mode='json')
+    from v3_test_helpers import finalize_wire, ready_fixture
+    body = finalize_wire(nine_events())
     try:
         client = TestClient(api.app)
         with caplog.at_level(logging.INFO, logger='uvicorn.error'):
@@ -65,7 +66,7 @@ def test_nine_event_finalize_receipt_sql_count_and_retry(event_db, monkeypatch, 
         assert event_db.execute('select sealed_event_count from student_attempts').fetchone()['sealed_event_count'] == 9
         assert event_db.execute('select count(*) as n from piano_outbox').fetchone()['n'] == 1
         # Retry returns the current locked state, not a fabricated ACCEPTED value.
-        event_db.execute("update piano_attempts set status='READY',validated_at=now()")
+        ready_fixture(event_db,A)
         caplog.clear()
         with caplog.at_level(logging.INFO, logger='uvicorn.error'):
             retry = client.post(f'/attempts/{A}/finalize', json=body)

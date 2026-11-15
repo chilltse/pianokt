@@ -137,7 +137,7 @@ def main():
         from .pykt_runtime import recommend_for_user
         from .online import connect
         from .storage import Objects
-        report, _ = recommend_for_user(str(args.bound_user), connect, Objects(os.environ['RAW_ROOT']))
+        report, _ = recommend_for_user(str(args.bound_user), connect, Objects(os.environ['DATA_ROOT']))
         report['execution_mode'] = 'live_bound_user_readonly'
     report['configuration'] = vars(config) if not args.bound_user else json.loads(os.environ.get('PYKT_RECOMMENDATION_CONFIG', '{}'))
     args.output.parent.mkdir(parents=True, exist_ok=True)

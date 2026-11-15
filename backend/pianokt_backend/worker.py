@@ -1,3 +1,5 @@
+from .storage_layout import DATA_ARCHITECTURE_VERSION, silver_result_key, silver_matches_key
+from .run_registry import register_run, result_bytes
 from .accuracy import backend_event_accuracy
 import json
 import math
@@ -5,10 +7,10 @@ import logging
 import os
 import uuid
 from datetime import datetime,timezone
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from psycopg.types.json import Jsonb
 from .online import connect
+from .provenance import recording_environment
 from .attempt_context import attempt_context, attach_attempt_context
 from .timing import stage
 from .upload_validation import validate_files, InvalidUpload
@@ -83,7 +85,7 @@ def _read_json_or_none(store,key):
         raise
 
 
-def _is_current_result(result,row,config,expected_run,observed_end_sec,reference_origin_sec,performance_events,transport_segments):
+def _is_current_result(result,row,config,expected_run,observed_end_sec,reference_origin_sec,performance_events,transport_segments,kc_labeler_version=None):
     """Only reuse an immutable result made by this matcher contract.
 
     Result keys are derived from the complete matcher identity, including raw
@@ -96,15 +98,18 @@ def _is_current_result(result,row,config,expected_run,observed_end_sec,reference
     if not isinstance(context,dict):
         return False
     return (
-        result.get('attempt_id')==str(row['id'])
+        result.get('data_architecture_version') == DATA_ARCHITECTURE_VERSION
+        and result.get('attempt_id')==str(row['id'])
         and result.get('alignment_run_id')==expected_run
+        and result.get('learner_key')==str(row.get('learner_key'))
+        and result.get('performance_events_hash')==row.get('performance_events_hash')
         and result.get('song_id')==row.get('song_id')
         and all(str(result.get(key))==str((row.get('metadata') or {}).get(key))
                 for key in ('segment_id','segment_index','midi_sha256'))
         and result.get('score_version')==row['reference_hash']
         and result.get('performance_hash')==row['performance_hash']
         and result.get('matcher_version')==matcher_version()
-        and result.get('kc_labeler_version')==resolve_kc_version()
+        and result.get('kc_labeler_version')==resolve_kc_version(kc_labeler_version)
         and result.get('config')==config.identity
         and result.get('source_environment','unknown')==row.get('source_environment','unknown')
         and context.get('reference_origin_sec')==reference_origin_sec
@@ -117,12 +122,14 @@ def _is_current_result(result,row,config,expected_run,observed_end_sec,reference
 
 def commit_alignment(c,attempt_id,lease_token,result_key,result):
     """Publish READY, authoritative score and outbox in the caller transaction."""
-    current=c.execute('select lease_token from public.piano_attempts where id=%s for update',(attempt_id,)).fetchone()
-    if str(current['lease_token'])!=lease_token:
+    current=c.execute('select *, lease_until > clock_timestamp() as lease_active from public.piano_attempts where id=%s for update',(attempt_id,)).fetchone()
+    if not current or str(current['lease_token'])!=lease_token or not current['lease_active']:
         raise RuntimeError('Worker lease superseded')
-    c.execute("update public.piano_attempts set status='READY',result_key=%s,summary=%s,alignment_run_id=%s,error_code=null,lease_until=null,updated_at=now() where id=%s",(result_key,Jsonb(result['summary']),result['alignment_run_id'],attempt_id))
-    c.execute('update public.piano_attempts set result_digest=%s,result_committed_at=clock_timestamp() where id=%s',
-              (digest(json.dumps(result,sort_keys=True,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode()),attempt_id))
+    saved = register_run(c, current, result_key, result, 'online')
+    c.execute("""update public.piano_attempts set data_architecture_version='3',status='READY',
+        result_key=%s,summary=%s,alignment_run_id=%s,result_digest=%s,result_committed_at=%s,
+        error_code=null,lease_until=null,updated_at=now() where id=%s""",
+        (result_key,Jsonb(result['summary']),result['alignment_run_id'],saved['result_digest'],saved['committed_at'],attempt_id))
     quality_valid,_=_quality(result)
     accuracy=result['summary'].get('backend_event_accuracy')
     c.execute("update public.challenge_recordings set accuracy_pct=%s,score_source=%s,accuracy_metric='backend_event_accuracy' where id=%s",
@@ -130,12 +137,99 @@ def commit_alignment(c,attempt_id,lease_token,result_key,result):
     payload=dict(event_type='alignment.completed',attempt_id=attempt_id,alignment_run_id=result['alignment_run_id'],result_key=result_key,source_environment=result.get('source_environment','unknown'))
     c.execute('insert into public.piano_outbox(event_type,aggregate_id,payload) values(%s,%s,%s) on conflict do nothing',('alignment.completed',result['alignment_run_id'],Jsonb(payload)))
 
+def build_silver(store, row, files, telemetry, config, *, kc_labeler_version=None):
+    """Shared online/research processing over hash-verified Raw inputs."""
+    attempt_id = str(row['id'])
+    settings = (row.get('metadata') or {}).get('settings', {})
+    observed_end_sec, reference_origin_sec = _alignment_window(settings)
+    performance_events = (telemetry or {}).get('events')
+    transport_segments = (telemetry or {}).get('transportSegments', [])
+    run=alignment_run_id(
+        files['reference'],files['performance'],attempt_id,config,
+        performance_events,observed_end_sec,transport_segments,reference_origin_sec,
+        kc_labeler_version=kc_labeler_version,
+    )
+    result_key=silver_result_key(run)
+    result=_read_json_or_none(store,result_key)
+    if result is not None and not _is_current_result(
+        result,row,config,run,observed_end_sec,reference_origin_sec,
+        performance_events,transport_segments,kc_labeler_version,
+    ):
+        raise ValueError('Immutable alignment result identity conflict')
+    if result is None:
+        result=align(
+            files['reference'],files['performance'],attempt_id,config,
+            stage_sink=lambda run,data:store.json(silver_matches_key(run),data),
+            performance_events=performance_events,
+            observed_end_sec=observed_end_sec,
+            transport_segments=transport_segments,
+            reference_origin_sec=reference_origin_sec,
+            kc_labeler_version=kc_labeler_version,
+        )
+        if result['alignment_run_id']!=run:
+            raise ValueError('Alignment run identity mismatch')
+        attach_attempt_context(result, attempt_context(row))
+        result.update(
+        data_architecture_version=DATA_ARCHITECTURE_VERSION,
+        learner_key=str(row['learner_key']),
+        session_id=str(row['id']),
+        source_environment=row.get('source_environment','unknown'),
+        practice_metadata=row['metadata'],
+        attempt_created_at=row['created_at'].isoformat(),
+        alignment_completed_at=datetime.now(timezone.utc).isoformat(),
+        performance_events=performance_events or [],
+        transport_segments=transport_segments,
+        performance_events_key=row.get('performance_events_key'),
+        performance_events_hash=row.get('performance_events_hash'),
+        performance_event_audit_schema_version=(telemetry or {}).get('schemaVersion'),
+    )
+        quality_valid,quality_reason=_quality(result)
+        for note in result['notes']:
+            note['within_observed_range']=observed_end_sec is None or note.get('ref_onset_sec') is None or note['ref_onset_sec']<=observed_end_sec+config.chord_onset_tolerance_sec
+            note['timing_labels_valid']=not settings.get('waiting',False) and quality_valid
+            note['alignment_quality_valid']=quality_valid
+            note['alignment_quality_reason']=quality_reason
+        observed=[n for n in result['notes'] if n['within_observed_range']]
+        expected=sum(n['alignment_type'] in ('match','deletion') for n in observed)
+        correct=sum(n['is_correct'] for n in observed)
+        result['summary'].update(
+            expected_notes=expected,
+            correct_notes=correct,
+            frontend_note_accuracy=settings.get('frontend_note_accuracy'),
+            backend_event_accuracy=backend_event_accuracy(result['events_data'], quality_valid),
+            missing_notes=sum(n['alignment_type']=='deletion' for n in observed),
+            timing_labels_valid=not settings.get('waiting',False) and quality_valid,
+            alignment_quality_valid=quality_valid,
+            alignment_quality_reason=quality_reason,
+        )
+        result['frontend_note_accuracy']=result['summary']['frontend_note_accuracy']
+        result['backend_event_accuracy']=result['summary']['backend_event_accuracy']
+        result['alignment_quality_valid']=quality_valid
+        result['alignment_quality_reason']=quality_reason
+        try:
+            store.json(result_key,result)
+        except ValueError:
+            # A duplicate lease may have completed first. Use the
+            # identical immutable result only if it satisfies this
+            # exact run identity; never overwrite it.
+            result=_read_json_or_none(store,result_key)
+            if result is None or not _is_current_result(
+                result,row,config,run,observed_end_sec,reference_origin_sec,
+                performance_events,transport_segments,kc_labeler_version,
+            ):
+                raise
+    raw = store.read(result_key)
+    if raw != result_bytes(result):
+        raise ValueError('Silver read-back integrity mismatch')
+    return result_key, result
+
+
 def process(attempt_id):
     attempt_id=str(uuid.UUID(str(attempt_id)))
     lease_token=str(uuid.uuid4())
     with connect() as c:
         row=c.execute("""update public.piano_attempts set status='VALIDATING',lease_token=%s,lease_until=now()+interval '10 minutes',processing_attempts=processing_attempts+1,updated_at=now()
-            where id=%s and processing_attempts<8 and (status in ('ACCEPTED','UPLOADED') or (status='RETRY' and next_retry_at<=now()) or (status in ('VALIDATING','PROCESSING') and lease_until<now())) returning *""",(lease_token,attempt_id,)).fetchone()
+            where id=%s and source_environment=%s and data_architecture_version='3' and processing_attempts<8 and (status in ('ACCEPTED','UPLOADED') or (status='RETRY' and next_retry_at<=now()) or (status in ('VALIDATING','PROCESSING') and lease_until<now())) returning *""",(lease_token,attempt_id,recording_environment())).fetchone()
         if not row:
             current=c.execute("""select status,
                 lease_until>clock_timestamp() as lease_active,
@@ -151,7 +245,7 @@ def process(attempt_id):
                 return
             logging.getLogger('uvicorn.error').warning('stage=worker.claim outcome=unavailable')
             raise RuntimeError('Attempt busy or not finalized')
-    store=Objects(os.environ['RAW_ROOT'])
+    store=Objects(os.environ['DATA_ROOT'])
     try:
         settings=row['metadata'].get('settings',{}) if isinstance(row.get('metadata'),dict) else {}
         observed_end_sec,reference_origin_sec=_alignment_window(settings)
@@ -174,77 +268,7 @@ def process(attempt_id):
                 if not validated: raise RuntimeError('Worker lease superseded')
                 if validated.get('finalization'):
                     project_challenge(c,validated,Finalize.model_validate(validated['finalization']))
-            run=alignment_run_id(
-                files['reference'],files['performance'],attempt_id,config,
-                performance_events,observed_end_sec,transport_segments,reference_origin_sec,
-            )
-            result_key=f'alignment/{run}/result.json'
-            result=_read_json_or_none(store,result_key)
-            if result is not None and not _is_current_result(
-                result,row,config,run,observed_end_sec,reference_origin_sec,
-                performance_events,transport_segments,
-            ):
-                raise ValueError('Immutable alignment result identity conflict')
-            if result is None:
-                result=align(
-                    files['reference'],files['performance'],attempt_id,config,
-                    stage_sink=lambda run,data:store.json(f'matching/{run}/matches.json',data),
-                    performance_events=performance_events,
-                    observed_end_sec=observed_end_sec,
-                    transport_segments=transport_segments,
-                    reference_origin_sec=reference_origin_sec,
-                )
-                if result['alignment_run_id']!=run:
-                    raise ValueError('Alignment run identity mismatch')
-                attach_attempt_context(result, attempt_context(row))
-                result.update(
-                learner_key=str(row['learner_key']),
-                session_id=str(row['id']),
-                source_environment=row.get('source_environment','unknown'),
-                practice_metadata=row['metadata'],
-                attempt_created_at=row['created_at'].isoformat(),
-                alignment_completed_at=datetime.now(timezone.utc).isoformat(),
-                performance_events=performance_events or [],
-                transport_segments=transport_segments,
-                performance_events_key=row.get('performance_events_key'),
-                performance_events_hash=row.get('performance_events_hash'),
-                performance_event_audit_schema_version=(telemetry or {}).get('schemaVersion'),
-            )
-                quality_valid,quality_reason=_quality(result)
-                for note in result['notes']:
-                    note['within_observed_range']=observed_end_sec is None or note.get('ref_onset_sec') is None or note['ref_onset_sec']<=observed_end_sec+config.chord_onset_tolerance_sec
-                    note['timing_labels_valid']=not settings.get('waiting',False) and quality_valid
-                    note['alignment_quality_valid']=quality_valid
-                    note['alignment_quality_reason']=quality_reason
-                observed=[n for n in result['notes'] if n['within_observed_range']]
-                expected=sum(n['alignment_type'] in ('match','deletion') for n in observed)
-                correct=sum(n['is_correct'] for n in observed)
-                result['summary'].update(
-                    expected_notes=expected,
-                    correct_notes=correct,
-                    frontend_note_accuracy=settings.get('frontend_note_accuracy'),
-                    backend_event_accuracy=backend_event_accuracy(result['events_data'], quality_valid),
-                    missing_notes=sum(n['alignment_type']=='deletion' for n in observed),
-                    timing_labels_valid=not settings.get('waiting',False) and quality_valid,
-                    alignment_quality_valid=quality_valid,
-                    alignment_quality_reason=quality_reason,
-                )
-                result['frontend_note_accuracy']=result['summary']['frontend_note_accuracy']
-                result['backend_event_accuracy']=result['summary']['backend_event_accuracy']
-                result['alignment_quality_valid']=quality_valid
-                result['alignment_quality_reason']=quality_reason
-                try:
-                    store.json(result_key,result)
-                except ValueError:
-                    # A duplicate lease may have completed first. Use the
-                    # identical immutable result only if it satisfies this
-                    # exact run identity; never overwrite it.
-                    result=_read_json_or_none(store,result_key)
-                    if result is None or not _is_current_result(
-                        result,row,config,run,observed_end_sec,reference_origin_sec,
-                        performance_events,transport_segments,
-                    ):
-                        raise
+            result_key,result=build_silver(store,row,files,telemetry,config)
         with connect() as c:
             commit_alignment(c,attempt_id,lease_token,result_key,result)
     except Exception as exc:

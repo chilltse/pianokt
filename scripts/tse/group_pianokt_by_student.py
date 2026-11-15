@@ -141,15 +141,19 @@ def group_export(data: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="PianoKT export-training JSON (may end in .txt)")
+    parser.add_argument("input", type=Path, help="Verified Gold knowledge_tracing bundle directory")
     parser.add_argument("output", nargs="?", type=Path, help="Output JSON path (optional)")
     args = parser.parse_args()
-    output = args.output or args.input.with_name(args.input.stem + ".by_student.json")
+    output = args.output or args.input.parent / (args.input.name + ".by_student.json")
     if args.input.resolve() == output.resolve():
         parser.error("Input and output paths must be different, to protect the original file")
 
-    with args.input.open("r", encoding="utf-8-sig") as f:
-        grouped = group_export(json.load(f))
+    from pianokt_backend.storage import Objects
+    from pianokt_backend.publication import read_bundle
+    manifest, files = read_bundle(Objects(str(args.input.parent)), args.input.name)
+    if manifest.get('data_architecture_version') != '3' or manifest.get('dataset_type') != 'knowledge_tracing':
+        parser.error('Expected a V3 knowledge_tracing bundle')
+    grouped = group_export(json.loads(files['training.json']))
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as f:

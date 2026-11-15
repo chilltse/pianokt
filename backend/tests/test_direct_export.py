@@ -6,6 +6,7 @@ from pianokt_backend.pipeline.direct import CommittedResults
 from pianokt_backend.pipeline.attempts import export_attempts
 from pianokt_backend.pipeline.training import export_dataset
 from pianokt_backend.publication import read_bundle
+from v3_test_helpers import bundle_file, bundle, training_file
 
 CUTOFF = '2026-02-01T00:00:00Z'
 
@@ -16,13 +17,13 @@ def setup(tmp_path):
     # Add the worker envelope to immutable fixture objects using a fresh root.
     from pianokt_backend.storage import Objects
     direct_store = Objects(str(tmp_path / 'direct'))
-    for key in store.keys('alignment'):
+    for key in store.keys('silver/alignment'):
         r = json.loads(store.read(key))
-        r.update(schema_version=3, performance_hash='performance',
+        r.update(data_architecture_version='3',schema_version=3, performance_hash='performance',
                  matcher_version='test-v3', config={'version':'test-v3'},
                  summary={'alignment_quality_valid':r['alignment_quality_valid']})
         direct_store.json(key, r)
-        rows.append(dict(source_environment='production',attempt_id=r['attempt_id'], learner_key='learner',
+        rows.append(dict(data_architecture_version='3',source_environment='production',attempt_id=r['attempt_id'], learner_key='learner',
                          alignment_run_id=r['alignment_run_id'], result_key=key,
                          reference_hash='score', performance_hash='performance',
                          result_digest=digest(direct_store.read(key)),
@@ -30,18 +31,17 @@ def setup(tmp_path):
     return direct_store, lake, context, rows
 
 
-def test_direct_matches_lake_without_listing_and_retries(tmp_path):
-    store, lake, context, rows = setup(tmp_path)
-    export_attempts(store,lake,CUTOFF,'datasets/lake',context)
-    expected = read_bundle(store,'datasets/lake')[1]['attempts.jsonl']
-    store.keys = lambda _: pytest.fail('Direct export must not scan raw objects')
+def test_direct_no_listing_and_idempotent_publication(tmp_path):
+    store, _, context, rows = setup(tmp_path)
     source = CommittedResults(rows)
-    result = export_attempts(store,source,CUTOFF,'datasets/direct',context)
-    assert read_bundle(store,'datasets/direct')[1]['attempts.jsonl'] == expected
-    assert result['source'] == 'postgres-ready-v1'
-    assert export_attempts(store,source,CUTOFF,'datasets/direct',context) == result
-    export_dataset(store,source,CUTOFF,'datasets/training.json',context)
-    data = json.loads(store.read('datasets/training.json'))
+    original_keys = store.keys
+    store.keys = lambda _: pytest.fail('Direct export must not scan objects')
+    result = export_attempts(store,source,CUTOFF,None,context)
+    assert result['source'] == 'postgres-registry-v3'
+    assert export_attempts(store,source,CUTOFF,None,context) == result
+    training = export_dataset(store,source,CUTOFF,None,context)
+    store.keys = original_keys
+    data = json.loads(training_file(store))
     assert len(data['examples']) == 4
     assert [e['attempt_id'] for e in data['examples']] == ['a1','a1','a3','a3']
 
@@ -51,7 +51,7 @@ def test_direct_integrity_failures_never_publish(tmp_path,failure):
     store, _, context, rows = setup(tmp_path)
     selection = None
     if failure == 'missing':
-        rows[0]['result_key'] = 'alignment/missing/result.json'
+        rows[0]['result_key'] = 'silver/alignment/missing/result.json'
         rows[0]['alignment_run_id'] = 'missing'
     elif failure == 'digest': rows[0]['result_digest'] = 'bad'
     elif failure == 'identity': rows[0]['learner_key'] = 'other'
@@ -66,8 +66,8 @@ def test_direct_integrity_failures_never_publish(tmp_path,failure):
         read = store.read
         store.read = lambda k: b'broken' if k == rows[0]['result_key'] else read(k)
     with pytest.raises((ValueError,FileNotFoundError)):
-        export_attempts(store,CommittedResults(rows),CUTOFF,'datasets/fail',context,selection)
-    assert store.keys('datasets') == []
+        export_attempts(store,CommittedResults(rows),CUTOFF,None,context,selection)
+    assert store.keys('gold') == []
 
 
 def test_direct_rejects_wrong_catalog_content_before_publication(tmp_path):
@@ -75,15 +75,15 @@ def test_direct_rejects_wrong_catalog_content_before_publication(tmp_path):
     row=rows[0]
     row.update(song_id=context['attempts'][0]['song_id'],segment_id='different-segment',segment_index=1,midi_sha256='a'*64)
     with pytest.raises(ValueError,match='identity/schema mismatch'):
-        export_attempts(store,CommittedResults(rows),CUTOFF,'datasets/wrong-content',context)
+        export_attempts(store,CommittedResults(rows),CUTOFF,None,context)
 
 
 def test_training_retains_attempt_context_for_older_results(tmp_path):
     store, _, context, rows = setup(tmp_path)
     for row in rows:
         row['metadata'] = {'settings': {'midi_keyboard_used': False}}
-    export_dataset(store,CommittedResults(rows),CUTOFF,'datasets/context.json',context)
-    data = json.loads(store.read('datasets/context.json'))
+    export_dataset(store,CommittedResults(rows),CUTOFF,None,context)
+    data = json.loads(training_file(store))
     for run in data['runs']:
         expected = next(a for a in context['attempts'] if a['attempt_id'] == run['attempt_id'])
         assert run['midi_keyboard_used'] is False
@@ -145,8 +145,8 @@ def test_training_and_grouping_preserve_detailed_event_responses(tmp_path):
         result['events_data'] = detailed
         source.json(row['result_key'], result)
         row['result_digest'] = digest(source.read(row['result_key']))
-    export_dataset(source,CommittedResults(rows),CUTOFF,'datasets/detailed.json',context)
-    payload = json.loads(source.read('datasets/detailed.json'))
+    export_dataset(source,CommittedResults(rows),CUTOFF,None,context)
+    payload = json.loads(training_file(source))
     spec = importlib.util.spec_from_file_location('group_students',
         Path(__file__).resolve().parents[2] / 'scripts/tse/group_pianokt_by_student.py')
     module = importlib.util.module_from_spec(spec)
@@ -167,12 +167,12 @@ def test_training_bad_response_shape_aborts_publication(tmp_path):
     original = store.read
     def malformed(key):
         raw = original(key)
-        if key == 'alignment/a1/result.json':
+        if key == 'silver/alignment/a1/result.json':
             result = json.loads(raw)
             result['events_data']['timing_offset_ms'][0] = [[], []]
             return json.dumps(result).encode()
         return raw
     store.read = malformed
     with pytest.raises(ValueError, match='hand shape: timing'):
-        export_dataset(store,lake,CUTOFF,'datasets/bad-details.json',context)
-    assert store.keys('datasets') == []
+        export_dataset(store,lake,CUTOFF,None,context)
+    assert store.keys('gold') == []

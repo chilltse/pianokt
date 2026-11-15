@@ -17,7 +17,7 @@ def main():
     args = parser.parse_args()
     database_guard()
     with verified_client() as client:
-        store = Objects(os.environ['RAW_ROOT'])
+        store = Objects(os.environ['DATA_ROOT'])
         snapshot = snapshot_for_user(connect, store, str(args.user_id))
         result = sync_history(client, snapshot, os.environ['PYKT_SYNC_DIR'], apply=args.apply)
         # A new READY attempt during sync invalidates binding; never report success for a stale snapshot.

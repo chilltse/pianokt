@@ -1,9 +1,11 @@
+> **架构历史资料**：涉及旧存储路径、配置和 Lakehouse 的步骤已退役。当前运行契约见 [Data Architecture V3](DATA_ARCHITECTURE_V3.md)，不要执行本文旧部署或导出命令。
+
 # PianoKT 事件驱动派发、低频补偿与冷启动优化：Codex 实施计划
 
-**状态：代码已按本规格实现并进行隔离测试，尚未云端部署。线上订阅和调度存在差异，发布前必须处理；详见 [实施与验收记录](RELAY_EVENT_DRIVEN_IMPLEMENTATION_ZH.md)。**  
-**基准代码：** `chilltse/pianokt`，`feature/3_layer_kc`，2026-11-05 已核对的版本。  
-**生产环境：** GCP `pianokt`，`us-central1`，Supabase PostgreSQL，GCS，Pub/Sub，Cloud Run，Terraform。  
-**前置依赖：** Challenge v2 / 异步 Finalize v3；线上数据库须已完成 `supabase/migrations/017_async_finalization.sql` 的协调升级，未完成时先停在预发布阶段。  
+**状态：代码已按本规格实现并进行隔离测试，尚未云端部署。线上订阅和调度存在差异，发布前必须处理；详见 [实施与验收记录](RELAY_EVENT_DRIVEN_IMPLEMENTATION_ZH.md)。**
+**基准代码：** `chilltse/pianokt`，`feature/3_layer_kc`，2026-11-05 已核对的版本。
+**生产环境：** GCP `pianokt`，`us-central1`，Supabase PostgreSQL，GCS，Pub/Sub，Cloud Run，Terraform。
+**前置依赖：** Challenge v2 / 异步 Finalize v3；线上数据库须已完成 `supabase/migrations/017_async_finalization.sql` 的协调升级，未完成时先停在预发布阶段。
 **目标：** 低流量情况下尽量使用免费额度；正常新演奏无需等待定时 Relay 就能触发 Worker；失败时可靠补偿；减少不必要的 Python 初始化和镜像成本。
 
 > **给 Codex 的首要指令**：先读取本分支的真实代码、测试、Terraform 及数据库迁移，核对本文件的前提是否仍成立。按“最小可测试改动”实现；不要擅自执行生产 Terraform apply、Supabase SQL、部署、迁移或删除资源；不要修改现有 v3 上传协议、身份认证、严格幂等与租约语义。遇到数据库唯一约束、线上订阅过滤器或 Terraform state 与设计不一致时，停止相关危险操作，先给出差异与安全替代计划。
@@ -39,7 +41,7 @@ Spark Pipeline 保持暂停；Direct Export、GCS 对象契约和前端协议不
 
 **重要选择：本次不把 Relay Job 改成 Service。** 对每 15 分钟才运行一次的补偿任务，先采用 1 vCPU / 1 GiB 的 Job（测量通过后可降到 512 MiB）；不引入额外 HTTP 入口或常驻实例。Service 在每分钟触发且每次很短时通常更便宜，但这里已经用事件驱动代替了高频空跑。
 
-**本次必须完成（P0）**：提交后立即派发、Outbox 保底、Worker 重复消息处理、Relay 低频化与轻量导入、API 轻量导入、Terraform IAM/环境变量、测试、观测与文档。  
+**本次必须完成（P0）**：提交后立即派发、Outbox 保底、Worker 重复消息处理、Relay 低频化与轻量导入、API 轻量导入、Terraform IAM/环境变量、测试、观测与文档。
 **本次先测不盲改（P1）**：Worker `subprocess.run` 每次新进程的开销、Docker 镜像拆分、进一步缩小内存或 CPU、改变评分执行方式。
 
 ---

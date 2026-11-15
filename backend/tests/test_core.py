@@ -5,8 +5,6 @@ import pytest
 from pianokt_backend.alignment.service import align,correct_offset,InsufficientAnchors,configured_labels
 from pianokt_backend.contracts import AlignmentConfig
 from pianokt_backend.storage import Objects
-from pianokt_backend.pipeline.tables import Tables
-from pianokt_backend.pipeline.jobs import catch_up
 
 def midi(path,shift=0):
     f=mido.MidiFile(); t=mido.MidiTrack(); f.tracks.append(t)
@@ -50,20 +48,13 @@ def test_real_alignment_replay_and_quality(tmp_path):
     assert all(event[0]==[] for event in r['events_data']['pitches'])
     assert len(stages)==1 and len(stages[0]['raw_matches'])==12
     r.update(learner_key='synthetic',song_id='scale',segment_id='scale-part-2',segment_index=2,midi_sha256='a'*64)
-    store=Objects(str(tmp_path/'raw')); tables=Tables(str(tmp_path/'lake'))
-    key=f"alignment/{r['alignment_run_id']}/result.json"; store.json(key,r)
-    assert catch_up(store,tables)==1
-    assert catch_up(store,tables)==0
-    assert catch_up(store,tables,True)==1
-    assert len(tables.rows('gold/fact_midi_alignment'))==12
-    assert len(tables.rows('gold/attempt_events'))==12
-    for name in ('gold/fact_midi_alignment','gold/attempt_events','gold/fact_alignment_attempt'):
-        assert all(row['segment_id']=='scale-part-2' and row['segment_index']==2 and row['midi_sha256']=='a'*64 for row in tables.rows(name))
-    bad=json.loads(json.dumps(r)); bad['alignment_run_id']='bad'; bad['notes'][0]['reject_reason']=99
-    store.json('alignment/bad/result.json',bad)
-    with pytest.raises(RuntimeError): catch_up(store,tables)
-    assert len(tables.rows('ops/completed_runs'))==1
-    assert len(tables.rows('quality/alignment_runs'))==1
+    from pianokt_backend.storage_layout import silver_result_key
+    from pianokt_backend.pipeline.attempts import validate_events
+    store=Objects(str(tmp_path/'data'))
+    key=silver_result_key(r['alignment_run_id']); store.json(key,r); store.json(key,r)
+    validate_events(json.loads(store.read(key))['events_data'])
+    bad=json.loads(json.dumps(r)); bad['song_id']='changed'
+    with pytest.raises(ValueError,match='Immutable object conflict'): store.json(key,bad)
 
 def test_demo():
     from pianokt_backend.inference import DemoRecommender
@@ -73,45 +64,15 @@ def test_demo():
     assert r[0]['predicted_accuracy'] is None
 
 def test_training_cutoff_and_mask(tmp_path):
+    from test_direct_export import setup, CUTOFF
+    from pianokt_backend.pipeline.direct import CommittedResults
     from pianokt_backend.pipeline.training import export_dataset
-    store=Objects(str(tmp_path))
-    tables=Tables(str(tmp_path/'lake'))
-    from pianokt_backend.pipeline.tables import ENVELOPE_SCHEMA
-    tables.merge('ops/completed_runs',[dict(event_id='r',event_type='alignment.completed',source_key='fixture',payload_json='{}')],ENVELOPE_SCHEMA,'event_id')
-    r=dict(source_environment='production',attempt_id='a',alignment_run_id='r',learner_key='s',alignment_quality_valid=True,attempt_created_at='2026-01-01T00:00:00+00:00',practice_metadata={'settings':{}},events_data={'onset_seconds':[0,.5,2], 'pitches':[[[],[60]],[[],[61]],[[],[62]]], 'kc_vectors':[[False,1,False,None,1,None]]*3, 'reject_reason':{'event':[0,0,1],'note':[[[],[0]],[[],[0]],[[],[1]]]}})
-    r['events_data'].update(intervals_seconds=[[None,None,None],[None,.5,.5],[None,1.5,1.5]],
-        timing_offset_ms=[[[],[0]],[[],[0]],[[],[None]]],
-        pitch_offset_semitones=[[[],[0]],[[],[0]],[[],[None]]],extra_notes=[[],[],[]])
-    r['alignment_completed_at']='2026-01-01T00:01:00+00:00'
-    store.json('alignment/r/result.json',r)
-    export_dataset(store,tables,'2026-02-01T00:00:00Z','datasets/test.json')
-    data=json.loads(store.read('datasets/test.json'))
-    assert len(data['examples'])==3
-    export_dataset(store,tables,'2025-02-01T00:00:00Z','datasets/empty.json')
-    assert json.loads(store.read('datasets/empty.json'))['examples']==[]
-
-
-def test_lake_partial_run_stays_invisible_and_recovers(tmp_path):
-    from pianokt_backend.pipeline.jobs import publish_alignment
-    ref=tmp_path/'ref.mid'; perf=tmp_path/'perf.mid'
-    midi(ref); midi(perf)
-    result=align(ref,perf,'attempt')
-    result.update(learner_key='learner',song_id='song')
-    tables=Tables(str(tmp_path/'lake'))
-    merge=tables.merge
-    def fail(name,*args):
-        if name=='ops/completed_runs': raise OSError('injected failure before commit')
-        return merge(name,*args)
-    tables.merge=fail
-    with pytest.raises(OSError): publish_alignment(result,tables,'alignment/result.json')
-    assert tables.rows('gold/fact_midi_alignment')==[]
-    assert tables.rows('silver/midi_alignment_events')==[]
-    tables.merge=merge
-    publish_alignment(result,tables,'alignment/result.json')
-    assert len(tables.rows('gold/fact_midi_alignment'))==12
-    snapshot=tables.snapshot(['gold/fact_midi_alignment','gold/fact_alignment_attempt'])
-    assert len(snapshot['gold/fact_alignment_attempt'])==1
-    # Same identity with changed payload cannot mutate a published snapshot.
-    result['song_id']='different'
-    with pytest.raises(ValueError,match='identity conflict'): publish_alignment(result,tables,'alignment/result.json')
-    assert tables.snapshot(list(snapshot))==snapshot
+    from pianokt_backend.publication import read_bundle
+    store, _, context, rows = setup(tmp_path)
+    result=export_dataset(store,CommittedResults(rows),CUTOFF,None,context)
+    _, files=read_bundle(store, 'gold/knowledge_tracing/'+result['dataset_version'])
+    data=json.loads(files['training.json'])
+    assert [r['correct'] for r in data['examples']]==[1,0,1,0]
+    result=export_dataset(store,CommittedResults(rows),'2025-02-01T00:00:00Z',None,context)
+    _, files=read_bundle(store, 'gold/knowledge_tracing/'+result['dataset_version'])
+    assert json.loads(files['training.json'])['examples']==[]

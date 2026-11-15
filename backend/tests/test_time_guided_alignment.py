@@ -5,11 +5,12 @@ from __future__ import annotations
 import copy
 
 import mido
+import pytest
 
 from pianokt_backend.alignment.service import align
 from pianokt_backend.contracts import AlignmentConfig
-from pianokt_backend.pipeline.jobs import _result_quality, publish_alignment
-from pianokt_backend.pipeline.tables import Tables
+from pianokt_backend.worker import _quality
+from pianokt_backend.pipeline.selection import rejection, select_one
 from pianokt_backend.worker import _alignment_window
 
 
@@ -92,7 +93,7 @@ def sidecar(notes, *, origin=0.0, include_stop=True):
     return {"schemaVersion": 1, "events": events, "transportSegments": segments}
 
 
-def enrich_for_lake(result, audit):
+def enrich_result(result, audit):
     result.update(
         learner_key="learner",
         song_id="song",
@@ -221,7 +222,7 @@ def test_gold_is_quality_gated_and_attempt_fact_preserves_committed_versions(tmp
     write_midi(performance, played)
     audit = sidecar(played)
 
-    valid = enrich_for_lake(
+    valid = enrich_result(
         align(
             reference,
             performance,
@@ -232,21 +233,10 @@ def test_gold_is_quality_gated_and_attempt_fact_preserves_committed_versions(tmp
         ),
         audit,
     )
-    tables = Tables(str(tmp_path / "lake"))
-    publish_alignment(valid, tables, "alignment/one/result.json")
-    assert len(tables.rows("bronze/midi_events")) == len(audit["events"])
-    assert len(tables.rows("silver/midi_alignment_events")) == 2
-    gold_rows = tables.rows("gold/fact_midi_alignment")
-    assert len(gold_rows) == 2
-    assert "payload_json" not in gold_rows[0]
-    assert gold_rows[0]["performance_player_song_time_sec"] is not None
-    assert gold_rows[0]["attempt_created_at_jst"] == "2026-09-01T09:00:00+09:00"
-    assert gold_rows[0]["alignment_completed_date_jst"] == "2026-09-01"
-    first_attempt = tables.rows("gold/fact_alignment_attempt")[0]
-    assert first_attempt["attempt_date_jst"] == "2026-09-01"
-    assert first_attempt["alignment_completed_at_jst"] == "2026-09-01T09:01:00+09:00"
-
-    rerun = enrich_for_lake(
+    assert rejection(valid) is None
+    assert len(valid['notes']) == 2
+    assert valid['performance_events'] == audit['events']
+    rerun = enrich_result(
         align(
             reference,
             performance,
@@ -258,12 +248,10 @@ def test_gold_is_quality_gated_and_attempt_fact_preserves_committed_versions(tmp
         ),
         audit,
     )
-    publish_alignment(rerun, tables, "alignment/two/result.json")
-    attempt_rows = tables.rows("gold/fact_alignment_attempt")
-    assert len(attempt_rows) == 2
-    assert attempt_rows[0]["attempt_id"] == "same-attempt"
-    assert {r["alignment_run_id"] for r in attempt_rows} == {valid["alignment_run_id"], rerun["alignment_run_id"]}
-
+    assert valid['alignment_run_id'] != rerun['alignment_run_id']
+    selected = {}; select_one(selected, valid)
+    with pytest.raises(ValueError, match='one alignment version'):
+        select_one(selected, rerun)
     invalid = copy.deepcopy(valid)
     invalid["alignment_run_id"] = "invalid-run"
     invalid["alignment_quality_valid"] = False
@@ -280,13 +268,9 @@ def test_gold_is_quality_gated_and_attempt_fact_preserves_committed_versions(tmp
         note["alignment_event_id"] = f"invalid-event-{index}"
         note["alignment_run_id"] = "invalid-run"
         note["attempt_id"] = "invalid-attempt"
-    publish_alignment(invalid, tables, "alignment/invalid/result.json")
-    assert len(tables.rows("gold/fact_alignment_attempt")) == 2
-    assert len(tables.rows("quality/alignment_runs")) == 1
-    assert _result_quality({"alignment_run_id": "legacy", "attempt_id": "legacy"}) == (
-        False,
-        "legacy_alignment_without_quality_gate",
-    )
+    assert rejection(invalid) == 'quality_rejected'
+    assert _quality(invalid) == (False, 'test_rejection')
+    assert _quality({})[0] is False
 
 
 def test_canonical_onsets_and_observed_end_tolerance(tmp_path):

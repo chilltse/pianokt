@@ -1,5 +1,6 @@
 """Supabase-authenticated API. Browser uploads new MIDI directly to private GCS."""
 import os
+from .storage_layout import raw_recording_key, raw_reference_key, raw_telemetry_key
 import json
 import math
 import logging
@@ -116,7 +117,7 @@ def user(authorization:str=Header(...)):
     except httpx.HTTPError as exc: raise HTTPException(503,'Auth unavailable') from exc
 
 @lru_cache(maxsize=1)
-def objects(): return Objects(os.environ['RAW_ROOT'])
+def objects(): return Objects(os.environ['DATA_ROOT'])
 
 _credentials_lock = Lock()
 
@@ -198,12 +199,13 @@ def create_attempt(body:Upload,uid=Depends(user)):
         check_catalog_identity(c,body)
         c.execute('insert into public.piano_learner_keys(user_id) values(%s) on conflict do nothing',(uid,))
         learner=c.execute('select learner_key from public.piano_learner_keys where user_id=%s',(uid,)).fetchone()['learner_key']
-        prefix=f'midi/{learner}/{body.attempt_id}'
-        events_key=prefix+'/performance-events.json' if body.performance_events_hash else None
+        performance_key=raw_recording_key(learner,body.attempt_id)
+        reference_key=raw_reference_key(learner,body.attempt_id)
+        events_key=raw_telemetry_key(learner,body.attempt_id) if body.performance_events_hash else None
         c.execute('''insert into public.piano_attempts(id,user_id,learner_key,song_id,song_source,song_title,metadata,performance_key,reference_key,performance_events_key,performance_hash,reference_hash,performance_events_hash,performance_events_count,source_environment,segment_id,segment_index,midi_sha256)
-            values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict(id) do nothing''',(body.attempt_id,uid,learner,body.song_id,body.song_source,body.song_title,Jsonb(metadata),prefix+'/performance.mid',prefix+'/reference.mid',events_key,body.performance_hash,body.reference_hash,body.performance_events_hash,body.performance_events_count,environment,body.segment_id,body.segment_index,body.midi_sha256))
+            values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict(id) do nothing''',(body.attempt_id,uid,learner,body.song_id,body.song_source,body.song_title,Jsonb(metadata),performance_key,reference_key,events_key,body.performance_hash,body.reference_hash,body.performance_events_hash,body.performance_events_count,environment,body.segment_id,body.segment_index,body.midi_sha256))
         row=owned_attempt(c,body.attempt_id,uid)
-        if not row or row['source_environment']!=environment or row['metadata']!=metadata: raise HTTPException(409,'Attempt identity conflict')
+        if not row or row.get('data_architecture_version')!='3' or row['source_environment']!=environment or row['metadata']!=metadata: raise HTTPException(409,'Attempt identity conflict')
     response=dict(attempt_id=str(body.attempt_id),performance_url=signed(row['performance_key'],'PUT'),reference_url=signed(row['reference_key'],'PUT'))
     if row['performance_events_key']:
         response['performance_events_url']=signed(row['performance_events_key'],'PUT','application/json')
@@ -219,6 +221,7 @@ def finalize(attempt_id:uuid.UUID,body:FinalizeRequest,uid=Depends(user)):
         with connect() as c:
             row=owned_attempt(c,attempt_id,uid)
             if not row: raise HTTPException(404,'Attempt not found')
+            if row.get('data_architecture_version')!='3': raise HTTPException(409,'Legacy attempt is archived; start a new attempt')
             row=commit_finalization(c,row,uid,body.resolve(row))
         dispatch_after_commit(row['outbox_event_id'])
         return {'id':str(attempt_id),'status':row['status'],'validated_at':row['validated_at']}
@@ -228,13 +231,17 @@ def finalize(attempt_id:uuid.UUID,body:FinalizeRequest,uid=Depends(user)):
 def status(attempt_id:uuid.UUID,uid=Depends(user)):
     with connect() as c: row=owned_attempt(c,attempt_id,uid)
     if not row: raise HTTPException(404,'Not found')
-    return {k:row[k] for k in ('id','status','summary','error_code','alignment_run_id','accepted_at','validated_at','validation_error','next_retry_at')}
+    return {k:row[k] for k in ('id','status','summary','error_code','alignment_run_id','accepted_at','validated_at','validation_error','next_retry_at','data_architecture_version')}
 
 @app.get('/attempts/{attempt_id}/download')
 def download(attempt_id:uuid.UUID,kind:str='performance',uid=Depends(user)):
     if kind not in ('performance','result'): raise HTTPException(422,'Invalid kind')
     with connect() as c: row=owned_attempt(c,attempt_id,uid)
     if not row: raise HTTPException(404,'Not found')
+    if row.get('data_architecture_version') != '3':
+        raise HTTPException(409,'Legacy recording is archived; no V3 result is available')
+    if kind=='result' and row['status']!='READY':
+        raise HTTPException(409,'Result not committed')
     key=row['performance_key'] if kind=='performance' else row['result_key']
     if not key: raise HTTPException(409,'Result not ready')
     return {'url':signed(key,'GET')}
@@ -258,11 +265,13 @@ def recommendations(uid=Depends(user)):
         return dict(recommendation_id=str(rid), **response)
     model=DemoRecommender()
     with connect() as c:
-        history=c.execute("select p.id,p.summary,p.alignment_run_id,p.result_key from public.piano_attempts p left join public.student_attempts a on a.attempt_id=p.id where p.user_id=%s and p.source_environment=%s and p.status='READY' and p.summary->>'alignment_quality_valid'='true' order by coalesce(a.started_at,p.created_at) desc,p.id desc limit 3",(uid,recording_environment())).fetchall()[::-1]
+        history=c.execute("select p.id,p.summary,p.alignment_run_id,p.result_key,p.result_digest from public.piano_attempts p left join public.student_attempts a on a.attempt_id=p.id where p.user_id=%s and p.source_environment=%s and p.data_architecture_version='3' and exists(select 1 from public.piano_alignment_runs r where r.attempt_id=p.id and r.alignment_run_id=p.alignment_run_id and r.result_digest=p.result_digest and r.processing_purpose='online') and p.status='READY' and p.summary->>'alignment_quality_valid'='true' order by coalesce(a.started_at,p.created_at) desc,p.id desc limit 3",(uid,recording_environment())).fetchall()[::-1]
         pref=c.execute('select genres from public.piano_preferences where user_id=%s',(uid,)).fetchone()
         catalog=c.execute("""select song_id::text as song_id,segment_id::text as segment_id,segment_index, title || ' — ' || coalesce(segment_title,'Segment ' || segment_index) as title,difficulty,genres from public.piano_public_song_catalog""").fetchall()
     for attempt in history:
-        result=json.loads(objects().read(attempt['result_key']))
+        raw=objects().read(attempt['result_key'])
+        if digest(raw)!=attempt['result_digest']: raise HTTPException(409,'Committed result integrity mismatch')
+        result=json.loads(raw)
         for k in ('notes','events_data','practice_metadata'): attempt[k]=result.get(k)
     response=dict(model_version=model.version,is_demo=True,input_alignment_run_ids=[a['alignment_run_id'] for a in history],items=model.recommend(history,pref['genres'] if pref else [],catalog,5))
     with connect() as c:

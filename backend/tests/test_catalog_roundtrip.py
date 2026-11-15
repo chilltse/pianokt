@@ -77,7 +77,7 @@ def test_catalog_activity_upload_and_projections_keep_the_same_fragment(db,monke
     from test_attempt_dataset import fixture
     objects,_,_=fixture(tmp_path)
     import json
-    result=json.loads(objects.read('alignment/a1/result.json'))
+    result=json.loads(objects.read('silver/alignment/a1/result.json'))
     result['practice_metadata']=row['metadata']
     record=build_record(result,snapshot['attempts'][0],1,1)
     online=db.execute('select exercise_id from user_play_logs').fetchone()['exercise_id']

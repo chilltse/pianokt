@@ -23,7 +23,7 @@ def accepted(event_db, monkeypatch):
     row = new_upload(event_db)
     with transaction(event_db): commit_finalization(event_db, row, U, full_packet())
     monkeypatch.setattr(worker, 'connect', lambda: transaction(event_db))
-    monkeypatch.setenv('RAW_ROOT', '/unused-test-store')
+    monkeypatch.setenv('DATA_ROOT', '/unused-test-store')
     return event_db
 
 
@@ -31,6 +31,9 @@ def accepted(event_db, monkeypatch):
 def test_duplicate_ack_does_not_claim_or_touch_files(accepted, monkeypatch, caplog, status):
     c = accepted
     token = uuid4()
+    if status == 'READY':
+        from v3_test_helpers import ready_fixture
+        ready_fixture(c, A)
     c.execute("update piano_attempts set status=%s,lease_token=%s,lease_until=now()+interval '10 minutes',next_retry_at=now()+interval '5 minutes',processing_attempts=3", (status, token))
     before = c.execute('select status,lease_token,lease_until,next_retry_at,processing_attempts from piano_attempts').fetchone()
     monkeypatch.setattr(worker, 'Objects', lambda *a: pytest.fail('duplicate started validation'))

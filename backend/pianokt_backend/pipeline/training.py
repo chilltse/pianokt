@@ -32,10 +32,13 @@ def export_dataset(objects,tables,cutoff,output_key, context=None, run_selection
     environment=export_environment(environment)
     if context is not None: context=filter_context(context,environment)
     boundary=utc(cutoff)
-    examples=[]; selected={}
+    examples=[]; selected={}; skipped={}
     by_id={str(a['attempt_id']):a for a in context['attempts']} if context is not None else {}
     for r in eligible_results(objects,tables,cutoff,run_selection,environment):
-        if rejection(r): continue
+        reason = rejection(r)
+        if reason:
+            skipped[reason] = skipped.get(reason, 0) + 1
+            continue
         a=by_id.get(r['attempt_id'])
         if context is not None:
             if a is None or utc(a['started_at'])>=boundary or utc(a.get('received_at',a['started_at']))>=boundary: continue
@@ -69,7 +72,16 @@ def export_dataset(objects,tables,cutoff,output_key, context=None, run_selection
                      visit_started_at=(utc(visit_starts[str(by_id[r['attempt_id']]['visit_id'])]).isoformat() if r['attempt_id'] in by_id and visit_starts.get(str(by_id[r['attempt_id']]['visit_id'])) else None),
                      alignment_version=r.get('alignment_version'),reference_grouping_version=r.get('reference_grouping_version'),kc_feature_names=r['events_data'].get('kc_feature_names'),song_id=r.get('song_id'),segment_id=r.get('segment_id'),segment_index=r.get('segment_index'),midi_sha256=r.get('midi_sha256'),matcher_version=r.get('matcher_version'),**training_attempt_context(r,by_id.get(r['attempt_id'])),kc_labeler_version=result_kc_version(r),result_digest=r.get('_committed_digest'))
                 for r in sorted(selected.values(),key=lambda r:r['attempt_id'])]
-    payload=dict(source_environment=environment,source='postgres-ready-v1' if hasattr(tables,'results') else 'lake-completed-v1',
-                 kc_labeler_version=dataset_kc_version(selected.values()),quality_policy='quality-valid-and-not-waiting',runs=provenance,dataset_version=stable_id(cutoff,environment,examples,provenance,dataset_kc_version(selected.values())),cutoff=utc(cutoff).isoformat(),examples=examples,warning='Split students/time before windowing. No trained model is included.')
-    objects.json(output_key,payload)
-    return payload['dataset_version']
+    payload=dict(source_environment=environment,source='postgres-registry-v3',
+                 kc_labeler_version=dataset_kc_version(selected.values()),quality_policy='quality-valid-and-not-waiting',runs=provenance,dataset_version=stable_id('kt-v3',utc(cutoff).isoformat(),environment,examples,provenance,dataset_kc_version(selected.values()),getattr(tables,'selection',{}),run_selection),cutoff=utc(cutoff).isoformat(),examples=examples,warning='Split students/time before windowing. No trained model is included.')
+    from ..publication import publish_bundle
+    from ..storage_layout import gold_dataset_prefix
+    from ..run_registry import result_bytes
+    from .gold import lineage
+    metadata = lineage('knowledge_tracing', selected.values(), cutoff, environment, run_selection, skipped)
+    metadata.update(schema_version='1.0', dataset_version=payload['dataset_version'],
+                    visit_count=len({r.get('visit_id') for r in provenance if r.get('visit_id')}), event_count=len(examples))
+    metadata['source_selection'] = getattr(tables,'selection',metadata['source_selection'])
+    if payload['dataset_version'] in getattr(tables,'withdrawn',()): raise ValueError('Dataset withdrawn')
+    prefix = gold_dataset_prefix('knowledge_tracing', payload['dataset_version'], output_key)
+    return publish_bundle(objects, prefix, {'training.json': result_bytes(payload)}, metadata)

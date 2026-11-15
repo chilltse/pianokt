@@ -1,3 +1,5 @@
+> **架构历史资料**：涉及旧存储路径、配置和 Lakehouse 的步骤已退役。当前运行契约见 [Data Architecture V3](DATA_ARCHITECTURE_V3.md)，不要执行本文旧部署或导出命令。
+
 # 工程重构与数据完整性记录
 
 > 历史阶段记录：本文保留当时的设计/验收信息。2026-11-04 的当前实践已升级为 migration 016、Challenge v2 单表事件与默认 Direct Export；以 [当前架构](ARCHITECTURE_ZH.md)、[数据字典](DATA_CONTRACT_V2_ZH.md) 和 [升级手册](DEPLOYMENT_AND_ROADMAP_ZH.md) 为准。

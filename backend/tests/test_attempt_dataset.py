@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from pianokt_backend.pipeline.attempts import export_attempts, utc
 from pianokt_backend.storage import Objects
+from v3_test_helpers import bundle_file, bundle, training_file
 
 
 def fixture(tmp_path):
@@ -19,61 +20,76 @@ def fixture(tmp_path):
     context = dict(visits=[dict(source_environment='production',id='v2',user_id='private-auth-id',learner_key='learner',started_at='2026-01-02T01:00:00Z'),
                            dict(source_environment='production',id='v1',user_id='private-auth-id',learner_key='learner',started_at='2026-01-02T08:00:00+08:00')],
                    attempts=[attempt('a3','v2','2026-01-02T01:00:00Z',1),attempt('a2','v1','2026-01-02T08:02:00+08:00',2),attempt('a1','v1','2026-01-02T08:01:00+08:00',1)], events=[])
+    runs = []
+    original_json = store.json
+    def commit_fixture(key, result):
+        original_json(key, result)
+        if key.startswith('silver/alignment/'):
+            runs.append(key)
+    store.json = commit_fixture
     for aid in ('a1','a2','a3'):
-        store.json(f'alignment/{aid}/result.json', dict(source_environment='production',attempt_id=aid,alignment_run_id=aid,learner_key='learner',score_version='score',
+        store.json(f'silver/alignment/{aid}/result.json', dict(schema_version=3,data_architecture_version='3',performance_hash='performance',summary={},config={'version':'1.0.0'},alignment_version='1.0.0',reference_grouping_version='1.0.0',matcher_version='test',kc_labeler_version='1.1.0',source_environment='production',attempt_id=aid,alignment_run_id=aid,learner_key='learner',score_version='score',
             song_id='70000000-0000-0000-0000-000000000001',segment_id='80000000-0000-0000-0000-000000000001',segment_index=1,midi_sha256='a'*64,
             alignment_completed_at='2026-01-02T02:00:00Z', alignment_quality_valid=aid!='a2',events_data=events))
-    tables = SimpleNamespace(rows=lambda _: [{'event_id':a} for a in ('a1','a2','a3','duplicate')])
+    def results(objects, cutoff, selection=None, environment='production'):
+        from pianokt_backend.contracts import digest
+        for key in runs:
+            r = json.loads(objects.read(key))
+            if r['source_environment'] != environment or utc(r['alignment_completed_at']) >= utc(cutoff): continue
+            if selection is not None and selection.get(r['attempt_id']) != r['alignment_run_id']: continue
+            r['_committed_digest'] = digest(objects.read(key))
+            yield r
+    tables = SimpleNamespace(results=results)
     return store, tables, context
 
 
 def test_ordering_is_utc_and_indices_precede_quality_filtering(tmp_path):
     store,tables,context = fixture(tmp_path)
-    manifest=export_attempts(store,tables,'2026-02-01T00:00:00Z','datasets/test',context)
-    rows=[json.loads(line) for line in store.read('datasets/test/attempts.jsonl').splitlines()]
+    manifest=export_attempts(store,tables,'2026-02-01T00:00:00Z',None,context)
+    rows=[json.loads(line) for line in bundle_file(store, 'attempts.jsonl').splitlines()]
     assert [(r['visit_index'],r['attempt_index']) for r in rows] == [(1,1),(2,3)]
     assert rows[0]['notes_evaluated']==3 and rows[0]['notes_successful']==2
     assert rows[0]['chords_evaluated']==1 and rows[0]['chords_successful']==1
     assert rows[0]['exit_status']=='quit'
     assert not {'attempt_id','visit_id','started_at','ended_at','attempt_created_at','session_index'} & rows[0].keys()
-    assert b'private-auth-id' not in b''.join(store.read(k) for k in store.keys('datasets'))
+    assert b'private-auth-id' not in b''.join(store.read(k) for k in store.keys('gold'))
     assert manifest['skipped']=={'quality_rejected':1}
-    assert export_attempts(store,tables,'2026-02-01T00:00:00Z','datasets/test',context)==manifest
-    mapping=json.loads(store.read('datasets/test/index_map.json'))
+    assert export_attempts(store,tables,'2026-02-01T00:00:00Z',None,context)==manifest
+    mapping=json.loads(bundle_file(store, 'index_map.json'))
     assert mapping[1]['attempt_id']=='a3'
 
 
 def test_export_refuses_multiple_alignment_versions(tmp_path):
     store,tables,context=fixture(tmp_path)
-    r=json.loads(store.read('alignment/a1/result.json')); r['alignment_run_id']='duplicate'
-    store.json('alignment/duplicate/result.json',r)
+    r=json.loads(store.read('silver/alignment/a1/result.json')); r['alignment_run_id']='duplicate'
+    store.json('silver/alignment/duplicate/result.json',r)
     with pytest.raises(ValueError,match='one alignment version'):
-        export_attempts(store,tables,'2026-02-01T00:00:00Z','datasets/test',context)
+        export_attempts(store,tables,'2026-02-01T00:00:00Z',None,context)
 
 
 def test_missing_visit_never_fabricates_history(tmp_path):
     store,tables,context=fixture(tmp_path); context['visits']=[]
-    manifest=export_attempts(store,tables,'2026-02-01T00:00:00Z','datasets/test',context)
+    manifest=export_attempts(store,tables,'2026-02-01T00:00:00Z',None,context)
     assert manifest['count']==0 and manifest['skipped']['missing_context']==3
 
 
 def test_late_received_history_not_visible_before_cutoff(tmp_path):
     store,tables,context=fixture(tmp_path)
     context['attempts'][-1]['received_at']='2026-03-01T00:00:00Z'
-    export_attempts(store,tables,'2026-02-01T00:00:00Z','datasets/test',context)
-    rows=[json.loads(line) for line in store.read('datasets/test/attempts.jsonl').splitlines()]
+    export_attempts(store,tables,'2026-02-01T00:00:00Z',None,context)
+    rows=[json.loads(line) for line in bundle_file(store, 'attempts.jsonl').splitlines()]
     assert [r['attempt_index'] for r in rows]==[2]
 
 
 def test_bad_event_shape_fails_before_any_files_written(tmp_path):
     store,tables,context=fixture(tmp_path)
-    r=json.loads(store.read('alignment/a1/result.json')); r['events_data']['pitches'][0]=[[48]]
+    r=json.loads(store.read('silver/alignment/a1/result.json')); r['events_data']['pitches'][0]=[[48]]
     # A separate in-memory object source permits testing an invalid input without overwriting immutable results.
     original=store.read
-    store.read=lambda key: json.dumps(r).encode() if key=='alignment/a1/result.json' else original(key)
+    store.read=lambda key: json.dumps(r).encode() if key=='silver/alignment/a1/result.json' else original(key)
     with pytest.raises(ValueError,match='hand shape'):
-        export_attempts(store,tables,'2026-02-01T00:00:00Z','datasets/test',context)
-    assert store.keys('datasets')==[]
+        export_attempts(store,tables,'2026-02-01T00:00:00Z',None,context)
+    assert store.keys('gold')==[]
 
 
 def test_timezone_required():
@@ -83,7 +99,7 @@ def test_timezone_required():
 def test_exercise_identity_does_not_depend_on_early_exit_crop(tmp_path):
     from pianokt_backend.pipeline.attempts import build_record
     store,_,context=fixture(tmp_path)
-    r=json.loads(store.read('alignment/a1/result.json'))
+    r=json.loads(store.read('silver/alignment/a1/result.json'))
     first=build_record(r,context['attempts'][0],1,1)
     r['score_version']='shorter-observed-crop'
     second=build_record(r,context['attempts'][0],1,2)
@@ -93,10 +109,10 @@ def test_exercise_identity_does_not_depend_on_early_exit_crop(tmp_path):
 def test_explicit_run_selection_and_manifest_validation(tmp_path):
     from pianokt_backend.publication import read_bundle
     store,tables,context=fixture(tmp_path)
-    r=json.loads(store.read('alignment/a1/result.json')); r['alignment_run_id']='duplicate'
-    store.json('alignment/duplicate/result.json',r)
-    export_attempts(store,tables,'2026-02-01T00:00:00Z','datasets/selected',context,{'a1':'duplicate'})
-    manifest,files=read_bundle(store,'datasets/selected')
+    r=json.loads(store.read('silver/alignment/a1/result.json')); r['alignment_run_id']='duplicate'
+    store.json('silver/alignment/duplicate/result.json',r)
+    export_attempts(store,tables,'2026-02-01T00:00:00Z',None,context,{'a1':'duplicate'})
+    manifest,files=bundle(store)
     assert manifest['count']==1
     assert json.loads(files['index_map.json'])[0]['alignment_run_id']=='duplicate'
 
@@ -107,10 +123,10 @@ def test_environment_filtered_before_indices_and_unknown_never_promoted(tmp_path
     dev=dict(context['attempts'][0],attempt_id='dev',visit_id='dev-visit',source_environment='development',started_at='2025-01-01T00:00:01Z')
     unknown=dict(context['attempts'][0],attempt_id='unknown',source_environment='unknown',started_at='2025-01-01T00:00:02Z')
     context['attempts'].extend([dev,unknown])
-    export_attempts(store,tables,'2026-02-01T00:00:00Z','datasets/filtered',context)
-    rows=[json.loads(line) for line in store.read('datasets/filtered/attempts.jsonl').splitlines()]
+    export_attempts(store,tables,'2026-02-01T00:00:00Z',None,context)
+    rows=[json.loads(line) for line in bundle_file(store, 'attempts.jsonl').splitlines()]
     assert [(r['visit_index'],r['attempt_index']) for r in rows]==[(1,1),(2,3)]
-    raw=store.read('datasets/filtered/attempt_metadata.json')
+    raw=bundle_file(store, 'attempt_metadata.json')
     assert b'"attempt_id":"dev"' not in raw and b'"attempt_id":"unknown"' not in raw
 
 
@@ -121,7 +137,7 @@ def test_actual_kc_version_propagates_or_mixed_export_fails(tmp_path, mixed):
     original = store.read
     def read(key):
         raw = original(key)
-        if key.startswith('alignment/'):
+        if key.startswith('silver/alignment/'):
             result = json.loads(raw)
             if not mixed or result['attempt_id'] == 'a1':
                 result['kc_labeler_version'] = '1.2.0'
@@ -130,19 +146,19 @@ def test_actual_kc_version_propagates_or_mixed_export_fails(tmp_path, mixed):
     store.read = read
     if mixed:
         with pytest.raises(ValueError, match='Mixed KC'):
-            export_attempts(store, tables, '2026-02-01T00:00:00Z', 'datasets/new', context)
+            export_attempts(store, tables, '2026-02-01T00:00:00Z', None, context)
         with pytest.raises(ValueError, match='Mixed KC'):
-            export_dataset(store, tables, '2026-02-01T00:00:00Z', 'datasets/train.json', context)
-        assert store.keys('datasets') == []
+            export_dataset(store, tables, '2026-02-01T00:00:00Z', None, context)
+        assert store.keys('gold') == []
     else:
-        manifest = export_attempts(store, tables, '2026-02-01T00:00:00Z', 'datasets/new', context)
+        manifest = export_attempts(store, tables, '2026-02-01T00:00:00Z', None, context)
         assert manifest['kc_labeler_version'] == '1.2.0'
-        for record in map(json.loads, store.read('datasets/new/attempts.jsonl').splitlines()):
+        for record in map(json.loads, bundle_file(store, 'attempts.jsonl').splitlines()):
             assert record['kc_labeler_version'] == '1.2.0'
             assert record['events_data']['reject_reason']['note'] == [[[0], [0]], [[], [1]]]
-        assert all(r['kc_labeler_version'] == '1.2.0' for r in json.loads(store.read('datasets/new/index_map.json')))
-        export_dataset(store, tables, '2026-02-01T00:00:00Z', 'datasets/train.json', context)
-        training = json.loads(store.read('datasets/train.json'))
+        assert all(r['kc_labeler_version'] == '1.2.0' for r in json.loads(bundle_file(store, 'index_map.json')))
+        export_dataset(store, tables, '2026-02-01T00:00:00Z', None, context)
+        training = json.loads(training_file(store))
         assert training['kc_labeler_version'] == '1.2.0'
         assert 'feature_version' not in training and 'feature_version' not in manifest
 
@@ -150,7 +166,7 @@ def test_actual_kc_version_propagates_or_mixed_export_fails(tmp_path, mixed):
 def test_exercise_identity_includes_original_midi_hash_segment_and_tracks(tmp_path):
     from pianokt_backend.pipeline.attempts import build_record
     store, _, context = fixture(tmp_path)
-    result = json.loads(store.read('alignment/a1/result.json'))
+    result = json.loads(store.read('silver/alignment/a1/result.json'))
     attempt = {**context['attempts'][0], 'midi_sha256': 'a'*64, 'segment_id': 'segment-one'}
     first = build_record(result, attempt, 1, 1)
     assert first['exercise_id'] != build_record(result, {**attempt, 'midi_sha256': 'b'*64}, 1, 1)['exercise_id']
@@ -161,7 +177,7 @@ def test_exercise_identity_includes_original_midi_hash_segment_and_tracks(tmp_pa
 def test_exercise_identity_includes_segment_even_with_same_bytes(tmp_path):
     from pianokt_backend.pipeline.attempts import build_record
     store, _, context = fixture(tmp_path)
-    result = json.loads(store.read('alignment/a1/result.json'))
+    result = json.loads(store.read('silver/alignment/a1/result.json'))
     attempt = {**context['attempts'][0], 'midi_sha256': 'a'*64, 'segment_id': 'segment-one'}
     first = build_record(result, attempt, 1, 1)
     second = build_record(result, {**attempt, 'segment_id': 'segment-two'}, 1, 1)

@@ -147,7 +147,7 @@ def test_finalize_is_atomic_and_immutable_on_retry(db):
     row=new_upload(db)
     body=full_packet()
     # Inject failure AFTER event hydration/sealing and upload status update.
-    db.execute('alter table challenge_recordings add constraint injected_failure check(accuracy_pct < 0)')
+    db.execute("alter table challenge_recordings add constraint injected_failure check(score_source <> 'pending')")
     db.execute('begin')
     try:
         with pytest.raises(RuntimeError,match='injected_failure'): commit_finalization(db,row,U,body)
@@ -172,20 +172,26 @@ def test_worker_fencing_and_completion_rollback(db):
     db.execute('insert into piano_learner_keys(user_id) values(%s)',(U,))
     db.execute("insert into piano_attempts(id,user_id,learner_key,song_id,song_source,performance_key,reference_key,performance_hash,reference_hash,status,lease_token,source_environment) values(%s,%s,(select learner_key from piano_learner_keys where user_id=%s),'song','local','p','r','h','h','PROCESSING',%s,'production')",(A,U,U,V))
     db.execute("insert into challenge_recordings(id,user_id,score_source) values(%s,%s,'pending')",(A,U))
-    result={'alignment_run_id':'run','summary':{'accuracy':.8,'alignment_quality_valid':True}}
-    with pytest.raises(RuntimeError,match='superseded'): commit_alignment(db,A,OTHER,'result.json',result)
+    db.execute("update piano_attempts set lease_until=now()+interval '10 minutes'")
+    row=db.execute('select * from piano_attempts').fetchone()
+    result=dict(data_architecture_version='3',schema_version=3,attempt_id=A,learner_key=str(row['learner_key']),
+        song_id='song',score_version='h',performance_hash='h',performance_events_hash=None,source_environment='production',
+        alignment_version='1.0.0',reference_grouping_version='1.0.0',matcher_version='test',kc_labeler_version='1.2.0',config={},
+        alignment_run_id='run',alignment_quality_valid=True,alignment_quality_reason='ok',
+        summary={'backend_event_accuracy':.8,'alignment_quality_valid':True})
+    with pytest.raises(RuntimeError,match='superseded'): commit_alignment(db,A,OTHER,'silver/alignment/run/result.json',result)
     assert db.execute('select status from piano_attempts').fetchone()['status']=='PROCESSING'
     # Failure after the READY write must roll it back as well.
     db.execute("alter table challenge_recordings add constraint injected_failure check(accuracy_pct < 50)")
     db.execute('begin')
     try:
-        with pytest.raises(RuntimeError,match='injected_failure'): commit_alignment(db,A,V,'result.json',result)
+        with pytest.raises(RuntimeError,match='injected_failure'): commit_alignment(db,A,V,'silver/alignment/run/result.json',result)
     finally: db.execute('rollback')
     assert db.execute('select status from piano_attempts').fetchone()['status']=='PROCESSING'
     assert db.execute('select result_digest from piano_attempts').fetchone()['result_digest'] is None
     assert db.execute('select count(*)::int n from piano_outbox').fetchone()['n']==0
     db.execute('alter table challenge_recordings drop constraint injected_failure')
-    db.execute('begin'); commit_alignment(db,A,V,'result.json',result); db.execute('commit')
+    db.execute('begin'); commit_alignment(db,A,V,'silver/alignment/run/result.json',result); db.execute('commit')
     assert db.execute('select status from piano_attempts').fetchone()['status']=='READY'
     assert float(db.execute('select accuracy_pct from challenge_recordings').fetchone()['accuracy_pct'])==80
     committed=db.execute('select result_digest,result_committed_at from piano_attempts').fetchone()
@@ -288,7 +294,7 @@ def test_projection_rebuild_preserves_client_outcome_separate_from_grade(db):
     from pianokt_backend.upload_service import commit_finalization
     from pianokt_backend.projections import rebuild_projections
     commit_finalization(db,new_upload(db),U,full_packet())
-    db.execute("update piano_attempts set status='READY',validated_at=now(),summary='{\"alignment_quality_valid\":true,\"accuracy\":0.4}'")
+    db.execute("update piano_attempts set data_architecture_version='legacy',status='READY',validated_at=now(),summary='{\"alignment_quality_valid\":true,\"accuracy\":0.4}'")
     db.execute('delete from user_play_logs')
     db.execute('delete from challenge_recordings')
     rebuild_projections(db,A)
@@ -333,13 +339,14 @@ def test_http_v2_upload_finalize_without_live_activity_and_digest_retry(db,monke
                     performance_hash=digest(midi),reference_hash=digest(midi),duration_sec=10)
         assert client.post('/attempts',json=upload).status_code==200
         body=full_packet().model_dump(mode='json')
+        body['activity']['attempt']={k:v for k,v in body['activity']['attempt'].items() if k in ('attempt_id','visit_attempt_sequence','started_at')}
         monkeypatch.setattr(api, 'objects', lambda: pytest.fail('async finalize must not access GCS'))
         old={**body,'schema_version':2}
         assert client.post(f'/attempts/{A}/finalize',json=old).status_code==422
         assert client.post(f'/attempts/{A}/finalize',json=body).status_code==202
         assert db.execute('select status from piano_attempts').fetchone()['status']=='ACCEPTED'
         assert client.post(f'/attempts/{A}/finalize',json=body).status_code==202
-        assert client.post('/activity',json=body['activity']).status_code==200
+        assert client.post('/activity',json=full_packet().activity.model_dump(mode='json')).status_code==200
         assert db.execute('select count(*)::int n from play_events_raw').fetchone()['n']==0
         body['activity']['events'][-1]['elapsed_playing_sec']=2
         assert client.post(f'/attempts/{A}/finalize',json=body).status_code==409
