@@ -1,3 +1,4 @@
+import alignmentPolicy from '../../../backend/pianokt_backend/alignment/alignment_policies/versions/v1_0_0.json'
 import type { Activity } from '@/features/activity'
 import { supabase } from '@/features/auth/supabase'
 import { indexedUploadStore, UploadQueue, type PendingUpload } from './upload-queue'
@@ -199,8 +200,10 @@ async function uploadSealedRecording(
         performance_hash: performanceHash,
         reference_hash: referenceHash,
         settings: {
+          alignment_version: alignmentPolicy.version,
           ...params.practiceSettings,
           client_accuracy_pct: params.accuracyPct,
+          frontend_note_accuracy: params.accuracyPct == null ? undefined : params.accuracyPct / 100,
           client_difficulty: params.difficulty,
           midi_keyboard_used: params.midiKeyboardUsed,
         },

@@ -69,7 +69,8 @@ def recommend_for_user(uid, connect, objects):
         config = RecommendationConfig(**json.loads(os.environ.get('PYKT_RECOMMENDATION_CONFIG', '{}')))
         # Separate unauthenticated public Storage client: never forward the PyKT token.
         with httpx.Client(timeout=15, trust_env=False) as storage_http:
-            provider = CatalogCandidateProvider(storage_http, os.environ['SUPABASE_URL'], context_provenance=proofs)
+            provider = CatalogCandidateProvider(storage_http, os.environ['SUPABASE_URL'],
+                context_provenance=proofs, feature_cache_root=os.environ.get('PYKT_CANDIDATE_FEATURE_DIR'))
             candidates = provider.load(catalog)
         response = RecommendationService(client, config).recommend(snapshot['student_id'], candidates, check_history=check)
         response['input_alignment_run_ids'] = [s['alignment_run_id'] for s in snapshot['sources'] if s['skip_reason'] is None]

@@ -86,3 +86,11 @@
 左右手沿用当前生产推断规则：单个有音符轨道通常全部视为右手（明确的 left/LH/bass 名称除外），不会自动把单轨钢琴拆成双手；多轨也不会默认将所有伴奏轨纳入 KC。输出目录重复运行会覆盖同名 JSON。
 
 当前六维 KC 的顺序由 `events_data.kc_feature_names` 给出，分别为黑键标志、同时音数、双手标志、Onset 间隔分箱、换音数、平均移动距离分箱。分箱值不是原始距离或原始时间；原始音符时间及事件间隔可从 notes/intervals_seconds 读取。
+
+
+
+
+# 批量提取曲库的KC：
+.venv/bin/pianokt-data extract-reference /Users/tse/Downloads/sightread-main/public/music/songs \
+  --kc-labeler-version 1.2.0 \
+  --output output/tmp/candidate-features

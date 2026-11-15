@@ -83,7 +83,7 @@ def test_projection_writes_content_columns_and_uses_shared_exercise_id():
     project_challenge(SimpleNamespace(execute=execute),row,body)
     recording=next(params for query,params in calls if 'insert into public.challenge_recordings' in query)
     session=next(params for query,params in calls if 'insert into public.user_play_logs' in query)
-    assert recording[-3:]==(SEGMENT,1,HASH) and session[-3:]==(SEGMENT,1,HASH)
+    assert recording[-5:-2]==(SEGMENT,1,HASH) and session[-3:]==(SEGMENT,1,HASH)
     assert session[3]==exercise_identity('builtin',SONG,SEGMENT,HASH,settings)
     assert session[3]!=exercise_identity('builtin',SONG,SEGMENT,'d'*64,settings)
 

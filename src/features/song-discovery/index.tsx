@@ -3,7 +3,7 @@ import type { SongMetadata } from '@/types'
 import { formatTime, getKey } from '@/utils'
 import { Heart, LoaderCircle, Pause, Play, RotateCcw } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import { useSegmentMarks, useSegmentRecommendations } from './hooks'
+import { useSegmentMarks } from './hooks'
 import { searchSegments } from './model'
 import { useSegmentPreview } from './preview'
 
@@ -23,7 +23,10 @@ export function SongSection({ title, children }: { title: string; children: Reac
 type Preview = ReturnType<typeof useSegmentPreview>
 type Marks = ReturnType<typeof useSegmentMarks>
 export function SegmentPreviewButton({ song, preview }: { song: SongMetadata; preview: Preview }) {
-  const state = preview.state.id === song.segment_id ? preview.state : null
+  const state =
+    preview.state.id === getKey(song.source === 'builtin' ? song.segment_id! : song.id, song.source)
+      ? preview.state
+      : null
   const label =
     state?.status === 'loading'
       ? 'Loading'
@@ -53,6 +56,27 @@ export function SegmentPreviewButton({ song, preview }: { song: SongMetadata; pr
       }}
     >
       <Icon size={18} className={label === 'Loading' ? 'animate-spin' : ''} />
+    </button>
+  )
+}
+export function SegmentMarkButton({ song, marks }: { song: SongMetadata; marks: Marks }) {
+  if (song.source !== 'builtin' || !song.segment_id) return null
+  const marked = marks.marks.has(song.segment_id)
+  const saving = marks.busy === song.segment_id
+  return (
+    <button
+      type="button"
+      aria-label={`${saving ? 'Saving' : marked ? 'Unmark' : 'Mark'} ${song.title}`}
+      aria-pressed={marked}
+      aria-busy={saving}
+      disabled={!!marks.busy || (!!marks.userId && marks.isLoading)}
+      className="rounded p-2 text-rose-500 disabled:opacity-60"
+      onClick={(e) => {
+        e.stopPropagation()
+        void marks.toggle(song.segment_id!)
+      }}
+    >
+      <Heart size={18} fill={marked ? 'currentColor' : 'none'} />
     </button>
   )
 }
@@ -102,28 +126,12 @@ export function SegmentTable({
             </td>
             <td className="text-right text-gray-500">{formatTime(song.duration)}</td>
             <td>
-              {song.source === 'builtin' && song.segment_id && (
-                <button
-                  aria-label={`Mark ${song.title}`}
-                  aria-pressed={marks.marks.has(song.segment_id)}
-                  disabled={marks.busy === song.segment_id || (!!marks.userId && marks.isLoading)}
-                  className="p-2 text-rose-500 disabled:opacity-50"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void marks.toggle(song.segment_id!)
-                  }}
-                >
-                  <Heart
-                    size={18}
-                    fill={marks.marks.has(song.segment_id) ? 'currentColor' : 'none'}
-                  />
-                </button>
-              )}
+              <SegmentMarkButton song={song} marks={marks} />
             </td>
             <td>
-              {song.source === 'builtin' && song.segment_id && (
-                <SegmentPreviewButton song={song} preview={preview} />
-              )}
+              {((song.source === 'builtin' && song.segment_id) ||
+                song.source === 'local' ||
+                song.source === 'base64') && <SegmentPreviewButton song={song} preview={preview} />}
             </td>
           </tr>
         ))}
@@ -135,15 +143,14 @@ export function SongDiscovery({
   songs,
   onSelect,
   preview,
+  marks,
 }: {
   songs: SongMetadata[]
   onSelect: (song: SongMetadata) => void
   preview: Preview
+  marks: Marks
 }) {
-  const marks = useSegmentMarks()
   const catalog = useCatalogStatus()
-  // Personalized sections only use the current published catalog, never stale offline entries.
-  const recommendations = useSegmentRecommendations(catalog.data ?? [])
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const filtered = searchSegments(songs, search)
@@ -169,23 +176,7 @@ export function SongDiscovery({
         <p role="alert">{preview.state.error}. Use Retry on the segment to try again.</p>
       )}
       <SongSection title="Recommended Songs">
-        {recommendations.error ? (
-          <p role="alert" className="p-4">
-            Unable to load recommendations.{' '}
-            <button className="underline" onClick={() => void recommendations.mutate()}>
-              Retry
-            </button>
-          </p>
-        ) : recommendations.isLoading || catalog.isLoading ? (
-          <p className="p-4">Loading…</p>
-        ) : (
-          table(
-            recommendations.data ?? [],
-            marks.userId
-              ? 'No personalized recommendations yet.'
-              : 'Sign in to see personalized recommendations.',
-          )
-        )}
+        <p className="p-4 text-sm text-gray-500">Personalized recommendations coming soon.</p>
       </SongSection>
       <SongSection title="Marked Songs">
         {marks.error ? (

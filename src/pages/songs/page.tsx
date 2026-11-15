@@ -1,9 +1,9 @@
 import { AppBar, MarketingFooter, Modal, Sizer } from '@/components'
-import { useOptionalAuth } from '@/features/auth'
 import { useCatalogStatus, useSongManifest } from '@/features/data/library'
 import { prefetchSongs } from '@/features/data/prefetch'
 import { isInitializedAtom } from '@/features/persist/persistence'
 import { SongDiscovery, useSegmentPreview } from '@/features/song-discovery'
+import { useSegmentMarks } from '@/features/song-discovery/hooks'
 import { SongPreviewModal } from '@/features/SongPreview'
 import { useEventListener } from '@/hooks'
 import { ChevronDown, FolderOpen } from '@/icons'
@@ -19,7 +19,7 @@ export default function SelectSongPage() {
   const catalogStatus = useCatalogStatus()
   let songs: SongMetadata[] = useSongManifest()
   const isInitialized = useAtomValue(isInitializedAtom)
-  useOptionalAuth()
+  const marks = useSegmentMarks()
   const [isUploadFormOpen, setUploadForm] = useState<boolean>(false)
   const [selectedSongMeta, setSelectedSongMeta] = useState<SongMetadata | null>(null)
   const preview = useSegmentPreview()
@@ -99,7 +99,7 @@ export default function SelectSongPage() {
           </label>
           <Sizer height={20} />
           {isInitialized ? (
-            <SongDiscovery songs={songs} onSelect={openPreview} preview={preview} />
+            <SongDiscovery marks={marks} songs={songs} onSelect={openPreview} preview={preview} />
           ) : (
             <p>Loading…</p>
           )}

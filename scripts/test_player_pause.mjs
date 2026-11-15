@@ -10,7 +10,7 @@ const source = ts.transpileModule(readFileSync('src/features/player/player.ts', 
 let now = 1005
 const context = vm.createContext({
   exports: {},
-  require: () => ({}),
+  require: (name) => name.endsWith('v1_0_0.json') ? { default: JSON.parse(readFileSync('backend/pianokt_backend/alignment/alignment_policies/versions/v1_0_0.json', 'utf8')) } : ({}),
   performance: { now: () => now },
   clearInterval() {},
 })

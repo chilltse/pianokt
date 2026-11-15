@@ -7,6 +7,8 @@ an unconstrained full-score DTW search.
 """
 
 from __future__ import annotations
+from ..accuracy import backend_event_accuracy
+from .reference_grouping import group_reference_onsets
 
 from functools import partial
 from types import SimpleNamespace
@@ -102,7 +104,7 @@ def alignment_run_id(
         resolve_kc_version(kc_labeler_version),
         # Output-contract identity: old immutable results lack event source IDs
         # and may serialize integer-domain fields as floats. Do not reuse them.
-        "event-source-ids-nullable-integers-attempt-context",
+        "event-source-ids-nullable-integers-attempt-context-explicit-accuracy-v1",
         _context_identity(
             performance_events,
             observed_end_sec,
@@ -361,12 +363,10 @@ def align(
     else:
         observed_end, end_source = 0.0, "unknown"
 
-    reference_notes = [
-        note for note in reference_all
-        if note.onset_sec <= observed_end + config.chord_onset_tolerance_sec
-    ]
-    reference_chords = group_chords(reference_notes, config.chord_onset_tolerance_sec)
-    performance_chords = group_chords(performance_notes, config.chord_onset_tolerance_sec)
+    reference_chords = [chord for chord in group_reference_onsets(reference_all, config.reference_grouping_version)
+                        if min(n.onset_sec for n in chord.notes) <= observed_end + config.chord_onset_tolerance_sec + 1e-9]
+    reference_notes = [note for chord in reference_chords for note in chord.notes]
+    performance_chords = group_chords(performance_notes, config.performance_chord_grouping_sec)
     non_monotonic_transport = audit.non_monotonic_transport or non_monotonic_segments
     if non_monotonic_transport:
         # Never sort a loop/seek into a plausible-looking linear attempt.
@@ -386,7 +386,7 @@ def align(
         )
 
     raw = pd.DataFrame(
-        rows_from_operations(reference_chords, performance_chords, operations),
+        rows_from_operations(reference_chords, performance_chords, operations, config.wrong_pitch_window_sec),
         columns=_RAW_COLUMNS,
     )
     raw_records = alignment_records(raw)
@@ -462,6 +462,7 @@ def align(
         "alignment_run_id": run_id, "attempt_id": attempt_id,
         "score_version": score_hash, "performance_hash": performance_hash,
         "alignment_version": config.version,
+        "reference_grouping_version": config.reference_grouping_version,
     }.items():
         df[key] = value
     expected = int(df.alignment_type.isin(["match", "deletion"]).sum())
@@ -470,7 +471,8 @@ def align(
         "expected_notes": expected, "correct_notes": correct,
         "extra_notes": int((df.alignment_type == "insertion").sum()),
         "missing_notes": int((df.alignment_type == "deletion").sum()),
-        "accuracy": float(correct / expected) if expected and quality_valid else None,
+        "frontend_note_accuracy": None,
+        "backend_event_accuracy": backend_event_accuracy(hands, quality_valid),
         "timing_labels_valid": quality_valid,
         "alignment_quality_valid": quality_valid,
         "alignment_quality_reason": quality_reason,
@@ -513,10 +515,13 @@ def align(
             "raw_matches": raw_records,
         })
     return {
+        "alignment_version": config.version, "reference_grouping_version": config.reference_grouping_version,
         "schema_version": 3, "kc_labeler_version": features.kc_labeler_version, "alignment_run_id": run_id, "attempt_id": attempt_id,
         "score_version": score_hash, "performance_hash": performance_hash,
         "config": config.identity, "matcher_version": matcher_version(),
         "alignment_context": context, "diagnostics": diagnostics, "summary": summary,
         "raw_matches": raw_records, "notes": alignment_records(df),
         "events_data": hands,
+        "frontend_note_accuracy": summary["frontend_note_accuracy"],
+        "backend_event_accuracy": summary["backend_event_accuracy"],
     }

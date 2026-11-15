@@ -1,17 +1,19 @@
-import { loadOfficialMidi } from '@/features/data/catalog'
-import { parseMidi } from '@/features/parsers'
+import { fetchSong } from '@/features/data'
 import { Player } from '@/features/player/player'
 import { getDefaultSongSettings } from '@/features/SongVisualization/utils'
+import { getAudioContext } from '@/features/synth/utils'
 import type { SongMetadata } from '@/types'
+import { getKey } from '@/utils'
 import { createStore } from 'jotai'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 export function useSegmentPreview() {
   const generation = useRef(0)
-  const active = useRef<{ id: string; player: Player } | null>(null)
+  const active = useRef<{ id: string; player: Player; unsubscribe: () => void } | null>(null)
   const [state, setState] = useState({ id: '', status: 'idle', error: '' })
   const stop = useCallback(() => {
     generation.current++
+    active.current?.unsubscribe()
     active.current?.player.stop()
     active.current = null
     setState({ id: '', status: 'idle', error: '' })
@@ -19,15 +21,17 @@ export function useSegmentPreview() {
   useEffect(
     () => () => {
       generation.current++
+      active.current?.unsubscribe()
       active.current?.player.stop()
       active.current = null
     },
     [],
   )
   async function toggle(song: SongMetadata) {
-    const id = song.segment_id!
+    const id = getKey(song.source === 'builtin' ? song.segment_id! : song.id, song.source)
     if (active.current?.id === id) {
       const player = active.current.player
+      if (player.getTime() >= player.getDuration()) player.seek(0)
       player.toggle()
       setState({ id, status: player.isPlaying() ? 'playing' : 'paused', error: '' })
       return
@@ -38,12 +42,10 @@ export function useSegmentPreview() {
     // A separate existing Player instance prevents stale async setup from touching modal playback.
     let player: Player | undefined
     try {
-      const bytes = await loadOfficialMidi({
-        midi_sha256: song.midi_sha256!,
-        storage_path: song.storage_path!,
-      })
+      // Resume during the click gesture, before MIDI/soundfont downloads finish.
+      const audioReady = getAudioContext().resume()
+      const [parsed] = await Promise.all([fetchSong(song.id, song.source, song), audioReady])
       if (token !== generation.current) return
-      const parsed = parseMidi(new Uint8Array(bytes))
       player = new Player(createStore(), false)
       const defaults = getDefaultSongSettings(parsed)
       await player.setSong(parsed, {
@@ -56,11 +58,11 @@ export function useSegmentPreview() {
         player.stop()
         return
       }
-      active.current = { id, player }
-      player.store.sub(player.state, () => {
+      const unsubscribe = player.store.sub(player.state, () => {
         if (active.current?.player === player)
           setState({ id, status: player!.isPlaying() ? 'playing' : 'paused', error: '' })
       })
+      active.current = { id, player, unsubscribe }
       player.play()
     } catch (e) {
       player?.stop()

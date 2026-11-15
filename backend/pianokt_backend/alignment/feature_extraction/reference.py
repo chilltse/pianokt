@@ -2,19 +2,21 @@
 from dataclasses import asdict
 from pathlib import Path
 
-from ...contracts import AlignmentConfig, check_midi, digest
+from ...contracts import check_midi, digest
 from ..hands import parse_midi_song_for_hand_inference, parser_infer_hands
-from ..time_guided import read_midi_notes, group_chords, reference_note_id
+from ..time_guided import read_midi_notes, reference_note_id
 from . import extract_reference_features
+from ..reference_grouping import group_reference_onsets, load_reference_grouping_policy
 
 
-def extract_midi_reference(path: Path, *, kc_labeler_version=None):
+def extract_midi_reference(path: Path, *, kc_labeler_version=None, reference_grouping_version=None):
     check_midi(path)
     notes = read_midi_notes(str(path))
     if not notes:
         raise ValueError(f"No playable notes: {path}")
-    tolerance = AlignmentConfig().chord_onset_tolerance_sec
-    chords = group_chords(notes, tolerance)
+    policy = load_reference_grouping_policy(reference_grouping_version)
+    tolerance = policy["onset_grouping_ms"] / 1000
+    chords = group_reference_onsets(notes, policy["version"])
     mapping = parser_infer_hands(parse_midi_song_for_hand_inference(path), "Reference MIDI")
     features = extract_reference_features(chords, mapping, kc_labeler_version=kc_labeler_version)
     events = features.events
@@ -22,6 +24,7 @@ def extract_midi_reference(path: Path, *, kc_labeler_version=None):
     return {
         "schema_version": 1,
         "artifact_type": "reference_features",
+        "reference_grouping_version": policy["version"],
         "kc_labeler_version": features.kc_labeler_version,
         "midi_sha256": digest(path.read_bytes()),
         "source_file": path.name,

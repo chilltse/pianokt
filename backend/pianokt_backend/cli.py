@@ -17,6 +17,7 @@ def main():
     a.add_argument('input', type=Path, help='MIDI file or directory (recursive)')
     a.add_argument('--output', required=True, type=Path, help='JSON file, or output directory for directory input')
     a.add_argument('--kc-labeler-version', default=None)
+    a.add_argument('--reference-grouping-version', default=None)
     a=sub.add_parser('pipeline'); a.add_argument('--replay',action='store_true')
     a=sub.add_parser('relay'); a.add_argument('--limit',type=int,default=1000)
     a.add_argument('--max-seconds',type=float,default=600)
@@ -43,7 +44,7 @@ def main():
         for path in paths:
             target = args.output / path.relative_to(args.input).parent / (path.name + '.json') if directory else args.output
             try:
-                result = extract_midi_reference(path, kc_labeler_version=args.kc_labeler_version)
+                result = extract_midi_reference(path, kc_labeler_version=args.kc_labeler_version, reference_grouping_version=args.reference_grouping_version)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False)+'\n')
                 print(json.dumps({'input':str(path),'output':str(target),'events':result['reference_events_count']}, ensure_ascii=False))

@@ -10,7 +10,8 @@ export type ChallengeRecordingRow = {
   duration_sec: number
   midi_storage_path: string
   created_at: string
-  accuracy_pct?: number
+  accuracy_pct?: number | null
+  frontend_note_accuracy?: number | null
   client_accuracy_pct?: number | null
   upload_status?: string
   validated_at?: string | null

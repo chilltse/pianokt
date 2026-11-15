@@ -9,6 +9,7 @@ from uuid import UUID
 import httpx
 
 from .pykt_integration import ReferenceCandidates
+from .pykt_candidate_cache import LocalCandidateFeatureCache
 from .song_import import MAX_BYTES
 
 CATALOG_SQL = '''select song_id::text, segment_id::text, segment_index, title,
@@ -17,13 +18,15 @@ CATALOG_SQL = '''select song_id::text, segment_id::text, segment_index, title,
 
 
 class CatalogCandidateProvider:
-    def __init__(self, http, supabase_url, *, context_provenance=None):
+    def __init__(self, http, supabase_url, *, context_provenance=None, feature_cache_root=None):
         self.http = http
         self.url = supabase_url.rstrip('/')
         # Administrator-audited, hash-bound sidecar; no table/schema mutation needed.
         self.provenance = context_provenance or {}
         self.extractor = ReferenceCandidates()
         self.bytes_cache = {}
+        self.feature_cache = (LocalCandidateFeatureCache(feature_cache_root, self.url)
+                              if feature_cache_root else None)
 
     def load(self, catalog):
         output = []
@@ -47,6 +50,12 @@ class CatalogCandidateProvider:
                     raise ValueError('missing_standalone_context_provenance')
                 if (record.get('midi_metadata') or {}).get('requires_full_context'):
                     raise ValueError('full_reference_context_required')
+                # Offline KC cache is opt-in. Verified context remains mandatory above.
+                if self.feature_cache is not None:
+                    rows = self.feature_cache.load(record)
+                    item.update(status='eligible', onset_count=len(rows), rows=rows, song_version=h)
+                    output.append(item)
+                    continue
                 if h not in self.bytes_cache:
                     with self.http.stream('GET', f'{self.url}/storage/v1/object/public/piano-midi/midi/{h}.mid',
                                           timeout=15, follow_redirects=False) as response:
@@ -74,7 +83,11 @@ class CatalogCandidateProvider:
                 error = str(exc)
                 allowed = {'duplicate_catalog_identity', 'invalid_segment_index', 'invalid_storage_path_or_hash',
                            'missing_standalone_context_provenance', 'full_reference_context_required',
-                           'midi_size_limit', 'midi_sha256_mismatch', 'empty_reference'}
+                           'midi_size_limit', 'midi_sha256_mismatch', 'empty_reference',
+                           'candidate_cache_missing_or_invalid', 'candidate_cache_empty',
+                           'candidate_cache_bad_vector', 'candidate_cache_bad_onset',
+                           'candidate_cache_identity_mismatch', 'candidate_cache_version_mismatch',
+                           'candidate_cache_too_large'}
                 item['reason'] = error if error in allowed else 'invalid_reference'
             output.append(item)
         return output

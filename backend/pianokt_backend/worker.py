@@ -1,3 +1,4 @@
+from .accuracy import backend_event_accuracy
 import json
 import math
 import logging
@@ -123,9 +124,9 @@ def commit_alignment(c,attempt_id,lease_token,result_key,result):
     c.execute('update public.piano_attempts set result_digest=%s,result_committed_at=clock_timestamp() where id=%s',
               (digest(json.dumps(result,sort_keys=True,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode()),attempt_id))
     quality_valid,_=_quality(result)
-    accuracy=result['summary'].get('accuracy')
-    c.execute('update public.challenge_recordings set accuracy_pct=%s,score_source=%s where id=%s',
-              (float(accuracy)*100 if quality_valid and accuracy is not None else 0,'aligned' if quality_valid and accuracy is not None else 'rejected',attempt_id))
+    accuracy=result['summary'].get('backend_event_accuracy')
+    c.execute("update public.challenge_recordings set accuracy_pct=%s,score_source=%s,accuracy_metric='backend_event_accuracy' where id=%s",
+              (float(accuracy)*100 if quality_valid and accuracy is not None else None,'aligned' if quality_valid and accuracy is not None else 'rejected',attempt_id))
     payload=dict(event_type='alignment.completed',attempt_id=attempt_id,alignment_run_id=result['alignment_run_id'],result_key=result_key,source_environment=result.get('source_environment','unknown'))
     c.execute('insert into public.piano_outbox(event_type,aggregate_id,payload) values(%s,%s,%s) on conflict do nothing',('alignment.completed',result['alignment_run_id'],Jsonb(payload)))
 
@@ -154,7 +155,8 @@ def process(attempt_id):
     try:
         settings=row['metadata'].get('settings',{}) if isinstance(row.get('metadata'),dict) else {}
         observed_end_sec,reference_origin_sec=_alignment_window(settings)
-        config=AlignmentConfig()
+        config=AlignmentConfig(version=settings.get('alignment_version', '1.0.0'),
+                               reference_grouping_version=settings.get('reference_grouping_version', '1.0.0'))
         # The result key itself is the immutable crash-recovery marker. It is
         # impossible for a legacy Parangonar manifest to pin this matcher to a
         # stale result, and no create-only manifest needs to be overwritten.
@@ -220,12 +222,15 @@ def process(attempt_id):
                 result['summary'].update(
                     expected_notes=expected,
                     correct_notes=correct,
-                    accuracy=correct/expected if expected and quality_valid else None,
+                    frontend_note_accuracy=settings.get('frontend_note_accuracy'),
+                    backend_event_accuracy=backend_event_accuracy(result['events_data'], quality_valid),
                     missing_notes=sum(n['alignment_type']=='deletion' for n in observed),
                     timing_labels_valid=not settings.get('waiting',False) and quality_valid,
                     alignment_quality_valid=quality_valid,
                     alignment_quality_reason=quality_reason,
                 )
+                result['frontend_note_accuracy']=result['summary']['frontend_note_accuracy']
+                result['backend_event_accuracy']=result['summary']['backend_event_accuracy']
                 result['alignment_quality_valid']=quality_valid
                 result['alignment_quality_reason']=quality_reason
                 try:

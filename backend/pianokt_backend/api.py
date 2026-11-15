@@ -187,7 +187,7 @@ def create_attempt(body:Upload,uid=Depends(user)):
     validate_alignment_window_settings(body.settings)
     if (body.performance_events_hash is None)!=(body.performance_events_count is None):
         raise HTTPException(422,'Performance event hash and count must be provided together')
-    for name,maximum in [('client_accuracy_pct',100),('client_difficulty',10000),('played_until_sec',14400)]:
+    for name,maximum in [('frontend_note_accuracy',1),('client_accuracy_pct',100),('client_difficulty',10000),('played_until_sec',14400)]:
         value=body.settings.get(name)
         if value is not None and (not finite_number(value) or not 0<=value<=maximum):
             raise HTTPException(422,f'Invalid {name}')

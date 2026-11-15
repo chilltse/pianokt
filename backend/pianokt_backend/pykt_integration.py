@@ -66,7 +66,7 @@ class ReferenceCandidates:
 
     def extract(self, reference: Path, *, song_id: str, song_version: str,
                 segment_id: str | None = None, start: float = 0, end: float | None = None,
-                kc_labeler_version: str = "1.2.0"):
+                kc_labeler_version: str = "1.2.0", reference_grouping_version: str = "1.0.0"):
         if not song_id or not song_version or (segment_id is not None and not segment_id):
             raise ValueError("Song identity and version are required")
         if not isfinite(start) or start < 0 or (end is not None and (not isfinite(end) or end <= start)):
@@ -74,9 +74,9 @@ class ReferenceCandidates:
         if segment_id is None and (start != 0 or end is not None):
             raise ValueError("Slicing requires segment_id")
         content_hash = sha256(reference.read_bytes()).hexdigest()
-        key = (content_hash, kc_labeler_version)
+        key = (content_hash, reference_grouping_version, kc_labeler_version)
         if key not in self._cache:
-            artifact = extract_midi_reference(reference, kc_labeler_version=kc_labeler_version)
+            artifact = extract_midi_reference(reference, kc_labeler_version=kc_labeler_version, reference_grouping_version=reference_grouping_version)
             if artifact['midi_sha256'] != content_hash:
                 raise CompatibilityError("Reference changed during extraction")
             if artifact['events_data']['kc_feature_names'] != KC_FEATURE_NAMES:

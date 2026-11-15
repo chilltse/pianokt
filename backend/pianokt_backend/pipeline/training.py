@@ -65,9 +65,9 @@ def export_dataset(objects,tables,cutoff,output_key, context=None, run_selection
 
     examples.sort(key=lambda e: (attempt_order_key(by_id[e['attempt_id']]) if e['attempt_id'] in by_id else (str(e['learner_key']),utc(e['ordering_timestamp']),'',0,e['attempt_id']))+(e['onset_seconds'],e['event_index']))
     visit_starts = {str(v['id']): v.get('started_at') for v in context['visits']} if context else {}
-    provenance=[dict(attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],
+    provenance=[dict(frontend_note_accuracy=r.get('frontend_note_accuracy'),backend_event_accuracy=r.get('backend_event_accuracy'),attempt_id=r['attempt_id'],alignment_run_id=r['alignment_run_id'],
                      visit_started_at=(utc(visit_starts[str(by_id[r['attempt_id']]['visit_id'])]).isoformat() if r['attempt_id'] in by_id and visit_starts.get(str(by_id[r['attempt_id']]['visit_id'])) else None),
-                     kc_feature_names=r['events_data'].get('kc_feature_names'),song_id=r.get('song_id'),segment_id=r.get('segment_id'),segment_index=r.get('segment_index'),midi_sha256=r.get('midi_sha256'),matcher_version=r.get('matcher_version'),**training_attempt_context(r,by_id.get(r['attempt_id'])),kc_labeler_version=result_kc_version(r),result_digest=r.get('_committed_digest'))
+                     alignment_version=r.get('alignment_version'),reference_grouping_version=r.get('reference_grouping_version'),kc_feature_names=r['events_data'].get('kc_feature_names'),song_id=r.get('song_id'),segment_id=r.get('segment_id'),segment_index=r.get('segment_index'),midi_sha256=r.get('midi_sha256'),matcher_version=r.get('matcher_version'),**training_attempt_context(r,by_id.get(r['attempt_id'])),kc_labeler_version=result_kc_version(r),result_digest=r.get('_committed_digest'))
                 for r in sorted(selected.values(),key=lambda r:r['attempt_id'])]
     payload=dict(source_environment=environment,source='postgres-ready-v1' if hasattr(tables,'results') else 'lake-completed-v1',
                  kc_labeler_version=dataset_kc_version(selected.values()),quality_policy='quality-valid-and-not-waiting',runs=provenance,dataset_version=stable_id(cutoff,environment,examples,provenance,dataset_kc_version(selected.values())),cutoff=utc(cutoff).isoformat(),examples=examples,warning='Split students/time before windowing. No trained model is included.')

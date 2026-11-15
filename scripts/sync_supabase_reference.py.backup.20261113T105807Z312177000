@@ -1,0 +1,395 @@
+#!/usr/bin/env python3
+"""Read-only Supabase catalog -> content-verified MIDI -> PianoKT extract-reference 1.2.0.
+
+Runs from a PianoKT checkout; writes ONLY local output files. It never mutates
+Supabase, Storage, production metadata, recommendation tables, or PyKT state.
+"""
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import tempfile
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+from uuid import UUID
+
+MIDI_MAX = 10 * 1024 * 1024
+CATALOG_MAX = 64 * 1024 * 1024
+PINNED_VERSION = '1.2.0'
+KC_FIELDS = [
+    'has_black_key', 'simultaneous_note_count', 'both_hands',
+    'onset_interval_bin_cs', 'change_count', 'mean_move_bin',
+]
+HEX_SHA = re.compile(r'^[0-9a-f]{64}$')
+KEYS = ('SUPABASE_URL', 'SUPABASE_ANON_KEY', 'DATABASE_URL', 'PIANOKT_ENV')
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        raise ValueError('Unexpected HTTP redirect; refusing untrusted destination')
+
+
+def read_local_env(repo: Path, env_name: str | None = None) -> dict[str, str]:
+    """Minimal dotenv parser: read known keys, never execute a config file."""
+    result = {}
+    files = [repo / '.env', repo / 'backend' / '.env']
+    if env_name:
+        files.append(Path(env_name).expanduser())
+    for path in files:
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding='utf-8-sig').splitlines():
+            line = line.strip()
+            if line.startswith('export '):
+                line = line[7:].lstrip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            key, value = key.strip(), value.strip()
+            if key not in KEYS:
+                continue
+            if value.startswith(('"', "'")) and len(value) >= 2 and value[-1] == value[0]:
+                value = value[1:-1]
+            elif '#' in value:
+                value = value.split(' #', 1)[0].strip()
+            if value:
+                result[key] = value
+    for key in KEYS:
+        if os.environ.get(key):
+            result[key] = os.environ[key]
+    return result
+
+
+def clean_endpoint(url: str) -> str:
+    parsed = urlsplit(url.strip())
+    if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path not in ('', '/') or parsed.query or parsed.fragment):
+        raise ValueError('SUPABASE_URL must be a bare HTTPS origin (e.g. https://xxx.supabase.co)')
+    return url.strip().rstrip('/')
+
+
+def limited_read(response, limit: int) -> bytes:
+    pieces, total = [], 0
+    while True:
+        chunk = response.read(min(1024 * 256, limit + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise ValueError(f'Remote response exceeds {limit} bytes')
+        pieces.append(chunk)
+    return b''.join(pieces)
+
+
+def public_catalog(base: str, anon_key: str, *, opener=None) -> list[dict]:
+    if not anon_key or anon_key.startswith('YOUR_'):
+        raise ValueError('SUPABASE_ANON_KEY is required for published catalog RPC')
+    opener = opener or build_opener(NoRedirect())
+    req = Request(f'{base}/rest/v1/rpc/piano_public_catalog', data=b'{}',
+                  headers={'apikey': anon_key, 'Authorization': 'Bearer ' + anon_key,
+                           'Content-Type': 'application/json', 'Accept': 'application/json'},
+                  method='POST')
+    try:
+        with opener.open(req, timeout=35) as resp:
+            if resp.status != 200:
+                raise ValueError(f'Catalog RPC returned status {resp.status}')
+            data = json.loads(limited_read(resp, CATALOG_MAX))
+    except HTTPError as exc:
+        raise ValueError(f'Catalog RPC HTTP {exc.code}; check URL, anon key and migration 019') from None
+    except URLError as exc:
+        raise ValueError(f'Catalog RPC network failure ({type(exc.reason).__name__})') from None
+    if isinstance(data, str):
+        data = json.loads(data)
+    if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
+        raise ValueError('Catalog RPC must return a JSON array of objects')
+    return data
+
+
+ALL_ACTIVE_SQL = '''
+select c.song_id::text as song_id, c.slug, c.title, c.composer,
+       c.status as song_status, s.segment_id::text as segment_id,
+       s.segment_index, s.title as segment_title, s.status as segment_status,
+       v.midi_sha256, v.storage_path, v.duration_ms, v.note_count,
+       v.track_count, v.midi_metadata, v.license, v.source_url
+from public.piano_song_catalog c
+join public.piano_song_segments s on s.song_id = c.song_id
+join public.piano_song_midis v on v.segment_id = s.segment_id
+    and v.midi_sha256 = s.active_midi_sha256
+order by c.song_id, s.segment_index, s.segment_id
+'''
+
+
+def all_active_catalog(database_url: str) -> list[dict]:
+    """All statuses; only each segment's current active MIDI, not every historical revision."""
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except ImportError:
+        raise ValueError('psycopg is required for --scope all; install PianoKT backend deps') from None
+    # psycopg's conninfo and auth exception text can contain secrets. Do not echo it.
+    try:
+        with psycopg.connect(database_url, row_factory=dict_row, connect_timeout=15) as conn:
+            conn.execute('set transaction isolation level repeatable read read only')
+            records = conn.execute(ALL_ACTIVE_SQL).fetchall()
+        return [dict(r) for r in records]
+    except Exception as exc:
+        raise ValueError(f'Read-only database catalog query failed ({type(exc).__name__}); check DATABASE_URL and role permissions') from None
+
+
+def validate_item(record: dict) -> dict:
+    sid, seg = str(UUID(str(record['song_id']))), str(UUID(str(record['segment_id'])))
+    index = record['segment_index']
+    if type(index) is not int or index < 1:
+        raise ValueError('Invalid segment_index')
+    sha = record.get('midi_sha256')
+    if not isinstance(sha, str) or not HEX_SHA.fullmatch(sha):
+        raise ValueError('Invalid MIDI SHA-256')
+    if record.get('storage_path') != f'midi/{sha}.mid':
+        raise ValueError('Storage path does not match immutable MIDI hash')
+    meta = record.get('midi_metadata') or {}
+    if not isinstance(meta, dict):
+        raise ValueError('Invalid midi_metadata')
+    return dict(record, song_id=sid, segment_id=seg, midi_sha256=sha, midi_metadata=meta)
+
+
+def atomic_bytes(path: Path, content: bytes):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(prefix='.partial-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as file:
+            file.write(content)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+def atomic_json(path: Path, value: Any):
+    atomic_bytes(path, (json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False, default=str) + '\n').encode('utf-8'))
+
+
+def download_hash_midi(base: str, sha: str, location: Path, *, opener=None) -> str:
+    if location.is_file():
+        if hashlib.sha256(location.read_bytes()).hexdigest() == sha:
+            return 'cache'
+        # Never trust a bad cache; replace only after a new valid download.
+    opener = opener or build_opener(NoRedirect())
+    req = Request(f'{base}/storage/v1/object/public/piano-midi/midi/{sha}.mid',
+                  headers={'Accept': 'audio/midi'}, method='GET')
+    try:
+        with opener.open(req, timeout=45) as response:
+            if response.status != 200:
+                raise ValueError(f'Storage status {response.status}')
+            raw = limited_read(response, MIDI_MAX)
+    except HTTPError as exc:
+        raise ValueError(f'Storage HTTP {exc.code}') from None
+    except URLError as exc:
+        raise ValueError(f'Storage network failure ({type(exc.reason).__name__})') from None
+    if raw[:4] != b'MThd':
+        raise ValueError('Downloaded object is not a MIDI file')
+    if hashlib.sha256(raw).hexdigest() != sha:
+        raise ValueError('MIDI hash mismatch; downloaded bytes not trusted')
+    atomic_bytes(location, raw)
+    return 'download'
+
+
+def validate_artifact(artifact: dict, sha: str):
+    if (not isinstance(artifact, dict) or artifact.get('artifact_type') != 'reference_features'
+            or artifact.get('kc_labeler_version') != PINNED_VERSION
+            or artifact.get('midi_sha256') != sha):
+        raise ValueError('Extractor artifact identity or version mismatch')
+    data = artifact.get('events_data')
+    if not isinstance(data, dict) or data.get('kc_feature_names') != KC_FIELDS:
+        raise ValueError('Unexpected KC feature order')
+    n = artifact.get('reference_events_count')
+    if type(n) is not int or n <= 0 or len(data.get('kc_vectors', [])) != n:
+        raise ValueError('Empty or inconsistent reference events')
+    for key in ('onset_seconds','onset_ids','reference_chord_indices','pitches','intervals_seconds'):
+        if not isinstance(data.get(key), list) or len(data[key]) != n:
+            raise ValueError(f'Inconsistent reference events column: {key}')
+    for vec in data['kc_vectors']:
+        if not isinstance(vec, list) or len(vec) != 6:
+            raise ValueError('Invalid KC vector shape')
+    return n
+
+
+def import_extractor(repo: Path):
+    backend = repo / 'backend'
+    if not (backend / 'pianokt_backend' / 'alignment' / 'feature_extraction' / 'reference.py').is_file():
+        raise ValueError('Expected PianoKT backend source in <repo>/backend; select feature/3_layer_kc')
+    sys.path.insert(0, str(backend))
+    try:
+        from pianokt_backend.alignment.feature_extraction.reference import extract_midi_reference
+        from pianokt_backend.alignment.feature_extraction import resolve_kc_version
+    except ImportError:
+        raise ValueError('PianoKT Python dependencies are missing; use the repository .venv (Python 3.13)') from None
+    if resolve_kc_version(PINNED_VERSION) != PINNED_VERSION:
+        raise ValueError('Required KC labeler version 1.2.0 is not registered')
+    return extract_midi_reference
+
+
+def safe_error(exc: Exception) -> str:
+    # Do not emit raw HTTP error body, connection strings, or credential-bearing URLs.
+    msg = str(exc) if isinstance(exc, (ValueError, KeyError, TypeError)) else ''
+    msg = re.sub(r'https?://\S+', '[URL]', msg)
+    msg = re.sub(r'(?i)(password|token|key|authorization)\s*[=:]\s*\S+', r'\1=[REDACTED]', msg)
+    return (msg[:180] or type(exc).__name__)
+
+
+def run(args, *, extract=None, opener=None) -> dict:
+    repo = Path(args.repo).expanduser().resolve()
+    if not (repo / 'backend' / 'pyproject.toml').is_file():
+        raise ValueError('--repo must point to the PianoKT root (contains backend/pyproject.toml)')
+    settings = read_local_env(repo, args.env_file)
+    base = clean_endpoint(settings.get('SUPABASE_URL', ''))
+    scope = args.scope
+    if scope == 'auto':
+        scope = 'all' if settings.get('DATABASE_URL') and not settings['DATABASE_URL'].startswith('postgresql://pianokt_backend:PASSWORD@') else 'published'
+    if scope == 'all':
+        if not settings.get('DATABASE_URL'):
+            raise ValueError('--scope all requires DATABASE_URL; --scope published uses anon RPC')
+        catalog = all_active_catalog(settings['DATABASE_URL'])
+    else:
+        catalog = public_catalog(base, settings.get('SUPABASE_ANON_KEY', ''), opener=opener)
+    if not catalog:
+        raise ValueError('Catalog is empty: check Supabase project, publication state and migrations')
+    if extract is None:
+        extract = import_extractor(repo)
+
+    destination = Path(args.output).expanduser()
+    if not destination.is_absolute():
+        destination = repo / destination
+    destination = destination.resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    midi_root = destination / 'midi'
+    artifact_root = destination / 'reference_features'
+    validated, rejected = [], []
+    identities = Counter()
+    for row in catalog:
+        try:
+            v = validate_item(row)
+            identities[(v['song_id'], v['segment_id'])] += 1
+            validated.append(v)
+        except (ValueError, KeyError, TypeError) as exc:
+            rejected.append({'status':'failed','reason':'invalid_catalog_record', 'error':safe_error(exc)})
+    results = list(rejected)
+    print(f'[catalog] source={scope} entries={len(catalog)} valid={len(validated)} invalid={len(rejected)}')
+    for i, record in enumerate(validated, 1):
+        sha, segment_id = record['midi_sha256'], record['segment_id']
+        identity = dict(song_id=record['song_id'], segment_id=segment_id, segment_index=record['segment_index'],
+                        title=record.get('title'), composer=record.get('composer'),
+                        segment_title=record.get('segment_title'),
+                        song_status=record.get('song_status', 'published' if scope == 'published' else None),
+                        segment_status=record.get('segment_status', 'published' if scope == 'published' else None),
+                        midi_sha256=sha,
+                        midi_metadata=record['midi_metadata'])
+        item = {**identity, 'status': 'failed'}
+        try:
+            if identities[(record['song_id'], segment_id)] != 1:
+                raise ValueError('Duplicate catalog song_id/segment_id identity')
+            midi = midi_root / f'{sha}.mid'
+            item['download'] = download_hash_midi(base, sha, midi, opener=opener)
+            target = artifact_root / segment_id / f'{sha}.reference.json'
+            cached = False
+            if target.is_file() and not args.force:
+                try:
+                    artifact = json.loads(target.read_text(encoding='utf-8'))
+                    validate_artifact(artifact, sha)
+                    cached = True
+                except (ValueError, OSError, TypeError, KeyError, json.JSONDecodeError):
+                    cached = False
+            if not cached:
+                artifact = extract(midi, kc_labeler_version=PINNED_VERSION)
+                validate_artifact(artifact, sha)
+                atomic_json(target, artifact)
+            item.update(status='ok', extraction='cache' if cached else 'extracted',
+                        onset_count=artifact['reference_events_count'],
+                        midi_path=str(midi.relative_to(destination)),
+                        reference_features_path=str(target.relative_to(destination)),
+                        context_status='requires_full_context' if record['midi_metadata'].get('requires_full_context') else 'unverified')
+        except Exception as exc:
+            item.update(status='failed', reason=safe_error(exc))
+        results.append(item)
+        print(f'[{i}/{len(validated)}] {record.get("title", "")} #{record["segment_index"]}: {item["status"]} ({item.get("onset_count", item.get("reason"))})', flush=True)
+        if args.fail_fast and item['status'] == 'failed':
+            break
+
+    good = [r for r in results if r['status'] == 'ok']
+    bad = [r for r in results if r['status'] == 'failed']
+    # IMPORTANT: This is intentionally NOT accepted PYKT_CATALOG_PROVENANCE.
+    # Only a reviewer can supply evidence for standalone_reference context.
+    review = {r['segment_id']: {'midi_sha256': r['midi_sha256'],
+                'kc_labeler_version': PINNED_VERSION,
+                'context': 'requires_full_context' if r['context_status'] == 'requires_full_context' else 'unverified',
+                'evidence': ''} for r in good}
+    summary = {
+        'generated_at_utc': datetime.now(timezone.utc).isoformat(),
+        'supabase_origin': base,
+        'environment': settings.get('PIANOKT_ENV', 'unspecified'),
+        'scope': scope,
+        'meaning_of_all': 'all statuses with an active MIDI per segment' if scope == 'all' else 'published songs and segments only',
+        'catalog_records': len(catalog), 'successful': len(good), 'failed': len(bad),
+        'newly_extracted': sum(r.get('extraction') == 'extracted' for r in good),
+        'reused_extraction': sum(r.get('extraction') == 'cache' for r in good),
+        'downloaded': sum(r.get('download') == 'download' for r in good),
+        'midi_cache_hits': sum(r.get('download') == 'cache' for r in good),
+        'total_onsets': sum(r['onset_count'] for r in good),
+        'ready_for_pykt': 0,
+        'notice': 'Features extracted only; provenance review required before PyKT candidate eligibility. No Supabase mutations.'
+    }
+    # Training-friendly, label-free candidate rows. Do not infer reject_reason or mastery.
+    onset_lines = []
+    for row in good:
+        artifact = json.loads((destination / row['reference_features_path']).read_text(encoding='utf-8'))
+        validate_artifact(artifact, row['midi_sha256'])
+        events = artifact['events_data']
+        for index, (onset, vector) in enumerate(zip(events['onset_seconds'], events['kc_vectors'], strict=True)):
+            onset_lines.append(json.dumps({
+                'song_id': row['song_id'], 'segment_id': row['segment_id'],
+                'segment_index': row['segment_index'], 'song_version': row['midi_sha256'],
+                'kc_labeler_version': PINNED_VERSION, 'onset_index': index,
+                'onset_time': onset, 'kc_vector': vector,
+                'context_review_status': row['context_status'],
+            }, ensure_ascii=False, allow_nan=False, separators=(',', ':')))
+    atomic_bytes(destination / 'candidate_onsets.jsonl',
+                 ('\n'.join(onset_lines) + ('\n' if onset_lines else '')).encode('utf-8'))
+    atomic_json(destination / 'candidate_catalog.json', good)
+    atomic_json(destination / 'catalog_snapshot.json', catalog)
+    atomic_json(destination / 'sync_report.json', {'summary': summary, 'items': results})
+    atomic_json(destination / 'provenance_REVIEW_ONLY.json', review)
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print(f'[report] {destination / "sync_report.json"}')
+    return summary
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--repo', default='.', help='PianoKT repository root')
+    parser.add_argument('--output', default='output/supabase_reference_extract', help='Local output folder')
+    parser.add_argument('--env-file', default=None, help='Extra local dotenv file (never executed)')
+    parser.add_argument('--scope', choices=['auto','all','published'], default='auto',
+                        help='auto: all active records if DATABASE_URL is set; else published public catalog')
+    parser.add_argument('--force', action='store_true', help='Re-extract even if existing artifact is verified')
+    parser.add_argument('--fail-fast', action='store_true', help='Stop after first failed item')
+    args = parser.parse_args()
+    try:
+        summary = run(args)
+    except Exception as exc:
+        print('ERROR: ' + safe_error(exc), file=sys.stderr)
+        return 2
+    return 1 if summary['failed'] else 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

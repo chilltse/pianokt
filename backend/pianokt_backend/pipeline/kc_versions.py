@@ -10,6 +10,10 @@ def result_kc_version(result):
 
 
 def dataset_kc_version(results):
+    results = list(results)
+    semantics = {(r.get("alignment_version", r.get("config", {}).get("version", "legacy")), r.get("reference_grouping_version", "legacy")) for r in results}
+    if len(semantics) > 1:
+        raise ValueError("Mixed alignment/reference grouping semantics are not supported")
     versions = {result_kc_version(result) for result in results}
     if len(versions) > 1:
         raise ValueError(f'Mixed KC versions are not supported: {sorted(versions)}')

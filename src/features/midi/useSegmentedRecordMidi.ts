@@ -60,12 +60,14 @@ class SimpleMidiRecorder {
   private events: TrackEvent[] = []
   private currentTick = 0
   private started = false
+  readonly openNotes = new Set<number>()
 
   constructor(bpm = DEFAULT_BPM) {
     this.bpm = bpm
   }
 
   start() {
+    this.openNotes.clear()
     this.events = []
     this.currentTick = 0
     this.started = true
@@ -365,14 +367,17 @@ export function useSegmentedRecordMidi(midiState: MidiStateLike, getSongTime?: S
   useEffect(() => {
     const handler = (e: MidiStateEvent) => {
       if (!recorderRef.current) return
-      if (!isRecordingRef.current) return
+      const closingPausedNote = !isRecordingRef.current && e.type === 'up' && recorderRef.current.openNotes.has(e.note)
+      if (!isRecordingRef.current && !closingPausedNote) return
 
       // Preserve the Web MIDI timestamp. When the browser dispatches a physical
       // MIDI event late because the main thread was busy, getSongTimeAt() can
       // still reconstruct the transport position at the actual event timestamp.
       const performanceNowTimestamp = nonNegativeFinite(e.performanceNowTimestamp, monotonicNow())
       const midiEventTimestamp = nonNegativeFinite(e.midiEventTimestamp, performanceNowTimestamp)
-      const playerSongTime = nonNegativeFinite(eventClockRef.current?.(midiEventTimestamp))
+      const playerSongTime = closingPausedNote
+        ? (lastSongTimeSecRef.current ?? 0)
+        : nonNegativeFinite(eventClockRef.current?.(midiEventTimestamp))
       advanceTo(playerSongTime)
 
       // 这里 deltaTicks 用 0，因为时间轴靠 advanceTo() 推进了。
@@ -381,8 +386,10 @@ export function useSegmentedRecordMidi(midiState: MidiStateLike, getSongTime?: S
       const velocity = midiDataByte(e.velocity, e.type === 'down' ? 102 : 0)
 
       if (e.type === 'down') {
+        recorderRef.current.openNotes.add(note)
         recorderRef.current.noteOn(0, note, velocity)
       } else {
+        recorderRef.current.openNotes.delete(note)
         recorderRef.current.noteOff(0, note, velocity)
       }
       recordPerformanceEvent({
@@ -407,6 +414,7 @@ export function useSegmentedRecordMidi(midiState: MidiStateLike, getSongTime?: S
       pauseRecording,
       stopRecording,
       flushSilenceTo,
+      hasOpenNotes: () => Boolean(recorderRef.current?.openNotes.size),
     }),
     [isRecording],
   )

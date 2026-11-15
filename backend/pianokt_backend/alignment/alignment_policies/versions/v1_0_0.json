@@ -1,0 +1,1 @@
+{"version":"1.0.0","matcher":"time-guided-chord-monotonic","time_basis":"song_time","performance_grouping_method":"first_note_anchor","performance_grouping_representative":"median","performance_chord_grouping_ms":50,"match_window_ms":1000,"perfect_threshold_ms":50,"correct_threshold_ms":200,"wrong_pitch_window_ms":300,"extra_note_attachment_ms":300}

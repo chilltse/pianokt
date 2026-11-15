@@ -184,7 +184,7 @@ LEGACY_SUMMARY_SCHEMA = pa.schema(
         ('extra_notes', pa.int64()),
         ('missing_notes', pa.int64()),
     ]
-    + [('accuracy', pa.float64()), ('timing_labels_valid', pa.bool_())]
+    + [('frontend_note_accuracy', pa.float64()), ('backend_event_accuracy', pa.float64()), ('timing_labels_valid', pa.bool_())]
     + SONG_CONTENT_FIELDS
 )
 SUMMARY_SCHEMA = LEGACY_SUMMARY_SCHEMA
@@ -217,7 +217,7 @@ ALIGNMENT_ATTEMPT_SCHEMA = pa.schema(
         ('anchors_kept', pa.int64()),
     ]
     + [
-        ('accuracy', pa.float64()),
+        ('frontend_note_accuracy', pa.float64()), ('backend_event_accuracy', pa.float64()),
         ('global_offset_sec', pa.float64()),
         ('offset_mad_sec', pa.float64()),
         ('reference_time_origin_sec', pa.float64()),

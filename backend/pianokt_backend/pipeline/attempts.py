@@ -129,6 +129,7 @@ def build_record(result, context, visit_index, attempt_index):
         time_playing=float(context['time_playing']), is_played_in_full='t' if context['is_played_in_full'] else 'f',
         exit_status='quit' if context['exit_status'] == 'abandoned' else context['exit_status'],
         exercise_part_index=settings.get('exercise_part_index', 0),
+        frontend_note_accuracy=result.get('frontend_note_accuracy'), backend_event_accuracy=result.get('backend_event_accuracy'),
         kc_labeler_version=result_kc_version(result), events_data=data,
     )
 

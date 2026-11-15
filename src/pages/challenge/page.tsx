@@ -1,3 +1,6 @@
+import { createChallengeSpaceShortcut, challengeKeyboardOptions } from './spaceShortcut'
+import { midiSettingsBlockReason, usedWebMidi } from './midiSafety'
+import { MidiModal } from '../play/components/MidiModal'
 import Toast from '@/components/Toast'
 import { activityPacket, interruptAttempt } from '@/features/activity'
 import {
@@ -12,7 +15,7 @@ import { useSongScrubTimes } from '@/features/controls'
 import { useSong } from '@/features/data'
 import { useSongMetadata } from '@/features/data/library'
 import midiState, {
-  getMidiInputs,
+  isInputMidiDeviceEnabled,
   useSegmentedRecordMidi,
   type PerformanceEventsAudit,
 } from '@/features/midi'
@@ -205,6 +208,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     pauseRecording,
     stopRecording,
     flushSilenceTo,
+    hasOpenNotes,
   } = useSegmentedRecordMidi(midiState, nowSongSec)
 
   const {
@@ -390,8 +394,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       showToast('Recording context is unavailable. Please sign in and try again.')
       return null
     }
-    const inputs = await getMidiInputs()
-    const midiKeyboardUsed = inputs.size > 0
+    const midiKeyboardUsed = usedWebMidi(params.performanceEvents.events)
 
     const result = await saveChallengeRecording({
       schemaVersion: 2,
@@ -631,6 +634,8 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       return
     }
 
+    if (isMidiOpen) return
+
     // A count-in is not part of a challenge take. Cancelling it must not
     // create a `paused`/`resumed` cycle without `play_started`, because that
     // would later fail the atomic finalize validation despite no recording
@@ -676,26 +681,75 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     }
   }
 
-  useEventListener<KeyboardEvent>('keydown', (evt: KeyboardEvent) => {
-    if (evt.code !== 'Space') return
-    evt.preventDefault()
-    // The listener is on window, so it still fires behind the end-of-challenge modal
-    // and while a terminal flow is finalizing. Neither may restart playback.
-    if (terminalFlowInFlightRef.current || showSuccessModal) return
-    if (isConfirmExitOpen) {
-      setIsConfirmExitOpen(false)
-      if (!playSessionIdRef.current) {
-        playSessionIdRef.current = crypto.randomUUID()
-        challengeEventsRef.current = []
-        accumulatedPlayMsRef.current = 0
-        challengeAssignmentRef.current = null
-        recordedTransportStartedRef.current = false
-      }
-      requestChallengeTransport(recordedTransportStartedRef.current ? 'resumed' : 'play_started')
-      return
+  const [isMidiOpen, setIsMidiOpen] = useState(false)
+  const performanceAreaRef = useRef<HTMLDivElement>(null)
+  const canChangeMidi = () => {
+    const reason = midiSettingsBlockReason({
+      playing: player.isPlaying(), countingDown: player.isCountingDown(), recording: isRecordingMidi,
+      finalizing: terminalFlowInFlightRef.current,
+      openNotes: Boolean(midiState.getPressedNotes().size || hasOpenNotes() || player.midiPressedNotes.size),
+    })
+    if (reason) { showToast(reason); return false }
+    return true
+  }
+  const openMidiSettings = () => {
+    if (canChangeMidi()) setIsMidiOpen(true)
+  }
+
+  useEffect(() => {
+    let disposed = false
+    let access: MIDIAccess | undefined
+    const disconnected = (event: MIDIConnectionEvent) => {
+      const port = event.port
+      if (port?.type !== 'input' || port.state !== 'disconnected' || !isInputMidiDeviceEnabled(port as MIDIInput)) return
+      if (playerState.playing || playerState.countingDown) handleTogglePlayingChallenge()
+      for (const note of Array.from(midiState.getPressedNotes().keys())) midiState.release(note)
+      showToast('MIDI input disconnected. Challenge paused; reconnect and release all notes before continuing.')
     }
-    handleTogglePlayingChallenge()
-  })
+    if (navigator.requestMIDIAccess) {
+      void navigator.requestMIDIAccess().then(value => {
+        if (disposed) return
+        access = value
+        access.addEventListener('statechange', disconnected)
+      }).catch(() => {})
+    }
+    return () => {
+      disposed = true
+      access?.removeEventListener('statechange', disconnected)
+    }
+  }, [playerState.playing, playerState.countingDown])
+
+  const spaceShortcut = useRef(createChallengeSpaceShortcut()).current
+  useEventListener<KeyboardEvent>('keyup', spaceShortcut.keyup, globalThis, challengeKeyboardOptions)
+  useEventListener('blur', spaceShortcut.reset)
+  // Capture before focused React Aria toolbar buttons consume Space. Toasts
+  // are notifications; only interactive/terminal UI blocks transport shortcuts.
+  useEventListener<KeyboardEvent>(
+    'keydown',
+    (evt: KeyboardEvent) => {
+      spaceShortcut.keydown(
+        evt,
+        isMidiOpen || terminalFlowInFlightRef.current || showSuccessModal || Boolean(localAlignment),
+        () => {
+          if (isConfirmExitOpen) {
+            setIsConfirmExitOpen(false)
+            if (!playSessionIdRef.current) {
+              playSessionIdRef.current = crypto.randomUUID()
+              challengeEventsRef.current = []
+              accumulatedPlayMsRef.current = 0
+              challengeAssignmentRef.current = null
+              recordedTransportStartedRef.current = false
+            }
+            requestChallengeTransport(recordedTransportStartedRef.current ? 'resumed' : 'play_started')
+            return
+          }
+          handleTogglePlayingChallenge()
+        },
+      )
+    },
+    globalThis,
+    challengeKeyboardOptions,
+  )
 
   // 播放过程中用 ref 记录“最后已知”的歌曲时间与总长，避免 effect 里读 player 时已被重置
   const lastSongTimeRef = useRef(0)
@@ -803,7 +857,8 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
         className={clsx(
           'inset-safe fixed grid h-full min-h-0 w-full grid-rows-[auto_1fr_auto] outline-none',
         )}
-        {...midiState.getListenerProps()}
+        ref={performanceAreaRef}
+        {...(isMidiOpen ? { tabIndex: -1 } : midiState.getListenerProps())}
         autoFocus
       >
         <TopBar
@@ -812,9 +867,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
           onClickBack={() => {
             void handleExitChallenge('back_button')
           }}
-          onClickMidi={() => {
-            showToast('MIDI selection is disabled in challenge mode.')
-          }}
+          onClickMidi={openMidiSettings}
           isSettingsOpen={false}
           onToggleSettings={() => {
             showToast('Settings are disabled in challenge mode.')
@@ -871,10 +924,15 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
         </div>
       </div>
 
-      {isConfirmExitOpen && (
+      <MidiModal isOpen={isMidiOpen} canChangeSettings={canChangeMidi} onClose={() => {
+        setIsMidiOpen(false)
+        requestAnimationFrame(() => performanceAreaRef.current?.focus())
+      }} />
+      {isConfirmExitOpen && !isMidiOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50">
           <div className="w-80 rounded-lg bg-[#1b1c23] p-6 text-sm text-white">
             <div className="mb-4 font-semibold">Exit challenge?</div>
+            <button onClick={openMidiSettings}>MIDI Settings</button>
             <div className="flex justify-end gap-3">
               <button
                 className="rounded border border-gray-500 px-3 py-1.5 text-xs"

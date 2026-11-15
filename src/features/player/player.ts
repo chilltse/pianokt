@@ -1,3 +1,4 @@
+import alignmentPolicy from '../../../backend/pianokt_backend/alignment/alignment_policies/versions/v1_0_0.json'
 // TODO: handle when users don't have an AudioContext supporting browser
 import { getSynthStub, InstrumentName } from '@/features/synth'
 import { transposeMidi } from '@/features/theory'
@@ -12,8 +13,8 @@ function increment(x: number) {
 }
 
 type JotaiStore = ReturnType<typeof getDefaultStore>
-const GOOD_RANGE = 300
-const PERFECT_RANGE = 50
+const GOOD_RANGE = alignmentPolicy.correct_threshold_ms
+const PERFECT_RANGE = alignmentPolicy.perfect_threshold_ms
 const DEFAULT_BPM = 120
 const DEFAULT_TIME_SIGNATURE = { numerator: 4, denominator: 4 }
 
@@ -157,10 +158,10 @@ export class Player {
       const currentTime = this.currentSongTime
       this.lateNotes.delete(midiNote)
       const diff = this.calcDiff(currentTime, lateNote.time)
-      const isHit = diff < GOOD_RANGE
-      if (diff < PERFECT_RANGE) {
+      const isHit = Math.abs(diff) <= GOOD_RANGE
+      if (Math.abs(diff) <= PERFECT_RANGE) {
         this.store.set(this.score.perfect, increment)
-      } else if (diff < GOOD_RANGE) {
+      } else if (Math.abs(diff) <= GOOD_RANGE) {
         this.store.set(this.score.good, increment)
       }
       if (isHit) {
@@ -179,8 +180,8 @@ export class Player {
     )
     if (nextNote && !isHitNote(this, nextNote)) {
       const diff = this.calcDiff(nextNote.time, this.currentSongTime)
-      if (diff < GOOD_RANGE) {
-        diff < PERFECT_RANGE
+      if (Math.abs(diff) <= GOOD_RANGE) {
+        Math.abs(diff) <= PERFECT_RANGE
           ? this.store.set(this.score.perfect, increment)
           : this.store.set(this.score.good, increment)
 
@@ -196,7 +197,7 @@ export class Player {
 
   // Given two song timestamps, return their difference in milliseconds after adjusting for the bpm modifier
   calcDiff(to: number, from: number) {
-    return ((to - from) * 1000) / this.store.get(this.bpmModifier)
+    return (to - from) * 1000
   }
 
   /* Return all notes that are valid to hit */

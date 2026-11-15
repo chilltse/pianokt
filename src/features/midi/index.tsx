@@ -64,6 +64,9 @@ export function isOutputMidiDeviceEnabled(device: MIDIOutput) {
 }
 
 export function enableInputMidiDevice(device: MIDIInput) {
+  if (enabledInputDevices.get(device.id) === device) return
+  const previous = enabledInputDevices.get(device.id)
+  if (previous) disableInputMidiDevice(previous)
   device.open()
   device.addEventListener('midimessage', onMidiMessage)
   enabledInputDevices.set(device.id, device)

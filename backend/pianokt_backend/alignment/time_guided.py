@@ -481,7 +481,7 @@ def group_chords(notes: Iterable[MidiNote], tolerance_sec: float) -> list[Chord]
     groups: list[list[MidiNote]] = [[ordered[0]]]
     group_start = ordered[0].onset_sec
     for note in ordered[1:]:
-        if note.onset_sec - group_start <= tolerance_sec:
+        if note.onset_sec - group_start <= tolerance_sec + 1e-9:
             groups[-1].append(note)
             continue
         groups.append([note])
@@ -714,6 +714,7 @@ def _pair_chord_notes(
     performance: Chord,
     reference_chord_index: int,
     performance_chord_index: int,
+    wrong_pitch_window_sec: float,
 ) -> list[dict[str, Any]]:
     """Pair exact pitches first, then local substitutions, then leftovers."""
 
@@ -752,12 +753,13 @@ def _pair_chord_notes(
     # same local, monotonic chord pair, so this is a meaningful substitution,
     # not a cross-bar DTW match.
     while remaining_reference and remaining_performance:
+        candidates = [(left, right) for left in range(len(remaining_reference))
+                      for right in range(len(remaining_performance))
+                      if abs(remaining_reference[left].onset_sec - remaining_performance[right].onset_sec) <= wrong_pitch_window_sec + 1e-9]
+        if not candidates:
+            break
         ref_index, perf_index = min(
-            (
-                (left, right)
-                for left in range(len(remaining_reference))
-                for right in range(len(remaining_performance))
-            ),
+            candidates,
             key=lambda pair: (
                 abs(
                     remaining_reference[pair[0]].pitch
@@ -791,9 +793,13 @@ def rows_from_operations(
     reference: list[Chord],
     performance: list[Chord],
     operations: Iterable[tuple[str, int | None, int | None]],
+    wrong_pitch_window_sec: float | None = None,
 ) -> list[dict[str, Any]]:
     """Expand chord operations into one row per alignment event."""
 
+    if wrong_pitch_window_sec is None:
+        from .alignment_policies import load_alignment_policy
+        wrong_pitch_window_sec = load_alignment_policy()["wrong_pitch_window_ms"] / 1000
     rows: list[dict[str, Any]] = []
     for operation, reference_index, performance_index in operations:
         if operation == "match":
@@ -804,6 +810,7 @@ def rows_from_operations(
                     performance[performance_index],
                     reference_index,
                     performance_index,
+                    wrong_pitch_window_sec,
                 )
             )
         elif operation == "deletion":

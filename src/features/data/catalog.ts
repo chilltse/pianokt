@@ -48,7 +48,7 @@ export function metadata(row: CatalogRow): SongMetadata {
     ...row,
     id: row.segment_id,
     song_title: row.title,
-    title: `${row.title} — ${row.segment_title || `Segment ${row.segment_index}`}`,
+    title: `${row.title} — Part ${row.segment_index}`,
     source: 'builtin',
     file: row.storage_path,
     duration: row.duration_ms / 1000,

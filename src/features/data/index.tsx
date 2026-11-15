@@ -12,7 +12,11 @@ function getBase64Song(data: string): Song {
   return parseMidi(binaryMidi)
 }
 
-async function fetchSong(id: string, source: SongSource, identity?: SongMetadata): Promise<Song> {
+export async function fetchSong(
+  id: string,
+  source: SongSource,
+  identity?: SongMetadata,
+): Promise<Song> {
   if (source === 'builtin') {
     await catalog.cached()
     let metadata = identity ?? catalog.resolve(id)
