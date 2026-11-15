@@ -10,7 +10,7 @@ const BUCKET = 'challenge-recordings'
 
 export { saveGcsRecording as saveChallengeRecording } from './gcs'
 
-export type LeaderboardSortBy = 'challenges' | 'accuracy' | 'difficulty'
+export type LeaderboardSortBy = 'challenges' | 'succeeded' | 'difficulty'
 
 /**
  * 获取排行榜。
@@ -31,7 +31,7 @@ export async function fetchLeaderboard(
     }
   }
 
-  const { data, error } = await supabase.rpc('get_leaderboard', {
+  const { data, error } = await supabase.rpc('get_product_leaderboard', {
     sort_by: sortBy,
   })
 

@@ -42,7 +42,7 @@ def project_challenge(c, row, body):
     exit_status = 'abandoned' if terminal.event_type == 'exited' else ('succeeded' if client_success is True else 'failed' if client_success is False else 'unknown')
     sql(c, 'projection.session_write', '''insert into public.user_play_logs(session_id,user_id,song_id,exercise_id,play_mode,
         days_since_signup,time_playing,song_time_sec,challenge_recording_id,is_played_in_full,exit_status,
-        started_at,ended_at,events_count,completion_reason,client_success,projection_version,segment_id,segment_index,midi_sha256,frontend_note_accuracy,accuracy_metric)
+        started_at,ended_at,events_count,completion_reason,client_success,projection_version,segment_id,segment_index,midi_sha256)
         values(%s,%s,%s,%s,'challenge',(extract(epoch from (%s::timestamptz-public.piano_registration_time(%s)))/86400.0),
         %s::numeric,%s::numeric,%s,%s,%s,%s,%s,%s,%s,%s,2,%s,%s,%s)
         on conflict(session_id) do update set segment_id=excluded.segment_id,segment_index=excluded.segment_index,midi_sha256=excluded.midi_sha256, song_id=excluded.song_id,exercise_id=excluded.exercise_id,

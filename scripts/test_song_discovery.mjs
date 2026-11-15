@@ -440,7 +440,21 @@ let modalProps,
 listPreview.stop = () => {
   stops++
 }
+const productModel = load('src/features/product-results/model.ts')
+const productLibrary = load('src/features/product-results/ChallengeLibrary.tsx', {
+  react: React, 'react/jsx-runtime': jsx,
+  '@/features/song-discovery': ui,
+  '@/features/song-discovery/model': model,
+  '@/features/challenge-history': { isChallengeSuccess: n => n >= 90 },
+  '@/utils': { formatTime: () => '0:10' },
+  './model': productModel,
+  './store': { useProductResults: () => ({ rows: [
+    {attempt_id:'a',song_source:'builtin',segment_id:'s1',midi_sha256:songs[0].midi_sha256,ended_at:'2026-11-15',completion:1,is_completed:true,frontend_note_accuracy:.91},
+    {attempt_id:'b',song_source:'builtin',song_id:'legacy',ended_at:'2026-11-14',completion:.2,is_completed:false,frontend_note_accuracy:null},
+  ] }) },
+})
 const Challenge = load('src/pages/challenge-songs/page.tsx', {
+  '@/features/product-results/ChallengeLibrary': productLibrary,
   react: React,
   'react/jsx-runtime': jsx,
   '@/components': { AppBar: () => null, MarketingFooter: () => null, Sizer: () => null },
@@ -486,14 +500,14 @@ await React.act(async () => {
   await tick()
 })
 await flush()
-const historyRows = document.querySelectorAll('section:first-of-type tbody tr')
+await click([...document.querySelectorAll('[role="tab"]')].find(b=>b.textContent==='Challenged Songs'))
+const historyRows = document.querySelectorAll('article')
 assert.equal(historyRows.length, 2)
-assert.equal(historyRows[0].querySelectorAll('button').length, 2)
-assert.equal(historyRows[1].querySelectorAll('button').length, 0)
-assert.ok(historyRows[1].textContent.includes('Legacy title'))
+assert.ok(historyRows[1].textContent.includes('Unavailable segment'))
+assert.equal(historyRows[1].querySelectorAll('button[aria-label^="Play"]').length, 0)
 await click(historyRows[0].querySelector('button[aria-label^="Play"]'))
 assert.equal(modalProps.show, false)
-await click(historyRows[0])
+await click([...historyRows[0].querySelectorAll('button')].find(b=>b.textContent==='Replay'))
 assert.equal(modalProps.songMeta.segment_id, 's1')
 assert.equal(modalProps.mode, 'challenge')
 assert.equal(stops, 1)

@@ -293,3 +293,31 @@ def feedback(body:Feedback,uid=Depends(user)):
             payload['event_type']='recommendation.'+body.event_type
             c.execute('insert into public.piano_outbox(event_id,event_type,aggregate_id,payload) values(%s,%s,%s,%s) on conflict do nothing',(body.event_id,payload['event_type'],str(body.event_id),Jsonb(payload)))
     return {'ok':True}
+
+# Product outcomes do not require MIDI bytes, a piano_attempt, or Worker success.
+from .product_results import ProductResult
+
+@app.post('/product-results')
+def save_product_result(body: ProductResult, uid=Depends(user)):
+    from .song_identity import check_catalog_identity
+    payload = body.model_dump(mode='json')
+    payload['is_succeeded'] = body.is_completed and body.frontend_note_accuracy is not None and body.frontend_note_accuracy >= .9
+    environment = recording_environment()
+    with connect() as c:
+        check_catalog_identity(c, body)
+        difficulty = None
+        if body.song_source == 'builtin':
+            difficulty = c.execute('select difficulty from public.piano_song_catalog where song_id=%s', (body.song_id,)).fetchone()['difficulty']
+        c.execute('insert into public.challenge_results(attempt_id,user_id,source_environment,payload,difficulty) values(%s,%s,%s,%s,%s) on conflict do nothing',
+                  (body.attempt_id,uid,environment,Jsonb(payload),difficulty))
+        existing = c.execute('select * from public.challenge_results where attempt_id=%s', (body.attempt_id,)).fetchone()
+        if str(existing['user_id']) != str(uid) or existing['source_environment'] != environment or existing['payload'] != payload:
+            raise HTTPException(409, 'Conflicting product result')
+    return {'attempt_id': str(body.attempt_id)}
+
+@app.get('/product-results')
+def list_product_results(after: uuid.UUID | None = None, uid=Depends(user)):
+    with connect() as c:
+        rows = c.execute('select attempt_id,payload from public.challenge_results where user_id=%s and source_environment=%s and (%s::uuid is null or attempt_id>%s::uuid) order by attempt_id limit 500',
+                         (uid,recording_environment(),after,after)).fetchall()
+    return {'items':[r['payload'] for r in rows], 'next':str(rows[-1]['attempt_id']) if len(rows)==500 else None}

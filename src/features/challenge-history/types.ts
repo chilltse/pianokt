@@ -27,8 +27,8 @@ export type LeaderboardEntry = {
   display_name: string | null
   avatar_url: string | null
   challenge_count: number
-  accuracy_avg: number | null
-  max_difficulty: number
+  succeeded_songs: number
+  max_difficulty: number | null
 }
 
 export type ChallengeRecording = {

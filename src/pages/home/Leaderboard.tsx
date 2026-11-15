@@ -8,19 +8,19 @@ import clsx from 'clsx'
 import { useEffect, useRef, useState } from 'react'
 
 const SORT_OPTIONS: { value: LeaderboardSortBy; label: string }[] = [
-  { value: 'challenges', label: 'Challenges' },
-  { value: 'accuracy', label: 'Accuracy' },
-  { value: 'difficulty', label: 'Max difficulty' },
+  { value: 'challenges', label: 'Full Challenges' },
+  { value: 'succeeded', label: 'Succeeded Songs' },
+  { value: 'difficulty', label: 'Highest Difficulty Succeeded' },
 ]
 
 function formatValue(sortBy: LeaderboardSortBy, entry: LeaderboardEntry): string {
   switch (sortBy) {
     case 'challenges':
       return String(entry.challenge_count)
-    case 'accuracy':
-      return entry.accuracy_avg == null ? '—' : `${Number(entry.accuracy_avg).toFixed(1)}%`
+    case 'succeeded':
+      return String(entry.succeeded_songs)
     case 'difficulty':
-      return Number(entry.max_difficulty).toFixed(1)
+      return entry.max_difficulty == null ? '—' : Number(entry.max_difficulty).toFixed(2)
     default:
       return '—'
   }
@@ -61,7 +61,7 @@ export function Leaderboard() {
     if (!supabase) return
     const channel = supabase
       .channel('leaderboard-sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'challenge_recordings' }, () =>
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'challenge_results' }, () =>
         refetch(),
       )
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => refetch())

@@ -25,7 +25,7 @@ const context = vm.createContext({
   Uint8Array,
   TextEncoder,
   atob,
-  require: () => ({
+  require: (name) => name.endsWith("v1_0_0.json") ? { default: JSON.parse(readFileSync("backend/pianokt_backend/alignment/alignment_policies/versions/v1_0_0.json", "utf8")) } : ({
     supabase: {
       auth: {
         getSession: async () => ({

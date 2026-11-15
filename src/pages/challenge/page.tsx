@@ -1,8 +1,6 @@
-import { createChallengeSpaceShortcut, challengeKeyboardOptions } from './spaceShortcut'
-import { midiSettingsBlockReason, usedWebMidi } from './midiSafety'
-import { MidiModal } from '../play/components/MidiModal'
 import Toast from '@/components/Toast'
 import { activityPacket, interruptAttempt } from '@/features/activity'
+import { useOptionalAuth } from '@/features/auth'
 import {
   isChallengeSuccess,
   localAlignmentLabEnabled,
@@ -20,6 +18,7 @@ import midiState, {
   type PerformanceEventsAudit,
 } from '@/features/midi'
 import { usePlayer } from '@/features/player'
+import { persistProductResult } from '@/features/product-results/store'
 import {
   getDefaultSongSettings,
   getHandSettings,
@@ -46,8 +45,11 @@ import { useAtomValue } from 'jotai'
 import { AlertCircle, ArrowLeft } from 'lucide-react'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useNavigate, useSearchParams } from 'react-router'
+import { MidiModal } from '../play/components/MidiModal'
 import ChallengeSuccessModal, { type ChallengeEndVariant } from './ChallengeSuccessModal'
 import { LocalAlignmentTimeline } from './LocalAlignmentTimeline'
+import { midiSettingsBlockReason, usedWebMidi } from './midiSafety'
+import { challengeKeyboardOptions, createChallengeSpaceShortcut } from './spaceShortcut'
 import { useChallengeAttempt } from './useChallengeAttempt'
 
 function SongNotFound({ songTitle, onGoBack }: { songTitle?: string; onGoBack: () => void }) {
@@ -84,6 +86,8 @@ export default function ChallengePage() {
 }
 
 function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
+  const productOwner = useOptionalAuth()?.user?.id
+  const attemptProductOwnerRef = useRef<string | undefined>(undefined)
   const navigate = useNavigate()
   const player = usePlayer()
   const playerState = usePlayerState()
@@ -306,6 +310,7 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     if (terminalFlowInFlightRef.current || !playSessionIdRef.current) return
     const songTimeSec = nowSongSec()
     if (eventType === 'play_started') {
+      attemptProductOwnerRef.current = productOwner
       freezeChallengeAssignment()
     }
     markPlayingStarted()
@@ -520,9 +525,56 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
       start: assignedRange.start,
       end: Math.min(Math.max(songTimeSec, assignedRange.start), assignedRange.end),
     }
-    const referenceMidiBase64 = assignment.song
-      ? bytesToBase64(referenceSnapshot(assignment.song, assignment.config, observedRange))
-      : ''
+    // Freeze and persist product results before any MIDI serialization can fail.
+    if (recordedTransportStartedRef.current && attemptProductOwnerRef.current) {
+      const denominator = [
+        player.score.perfect,
+        player.score.good,
+        player.score.missed,
+        player.score.error,
+      ].reduce((sum, atom) => sum + player.store.get(atom), 0)
+      const full = !stopPlayback && songTimeSec >= assignedRange.end - 0.001
+      const identity = assignment.song?.officialIdentity
+      const started = challengeEventsRef.current.find((event) => event.eventType === 'play_started')
+      void persistProductResult(attemptProductOwnerRef.current, {
+        attempt_id: sessionId,
+        song_source: source as 'builtin' | 'local',
+        song_id: identity?.song_id ?? id,
+        segment_id: identity?.segment_id,
+        segment_index: identity?.segment_index,
+        midi_sha256: identity?.midi_sha256,
+        frontend_note_accuracy:
+          denominator > 0 && Number.isFinite(accuracy) ? accuracy / 100 : null,
+        completion: full
+          ? 1
+          : Math.max(
+              0,
+              Math.min(
+                1,
+                (songTimeSec - assignedRange.start) /
+                  Math.max(0.001, assignedRange.end - assignedRange.start),
+              ),
+            ),
+        is_completed: full,
+        completion_reason: full ? 'finished' : 'exited',
+        started_at: started?.clientTs ?? new Date().toISOString(),
+        ended_at: new Date().toISOString(),
+        duration: Math.max(0, accumulatedPlayMsRef.current / 1000),
+        scoring_version: 'frontend-note-v1',
+      }).catch(() =>
+        showToast(
+          'Your challenge result could not be saved on this device. Please keep this page open.',
+        ),
+      )
+    }
+    let referenceMidiBase64 = ''
+    try {
+      referenceMidiBase64 = assignment.song
+        ? bytesToBase64(referenceSnapshot(assignment.song, assignment.config, observedRange))
+        : ''
+    } catch (error) {
+      console.error('[Challenge] Reference serialization failed; product result is independent', error)
+    }
 
     setTerminalFlowInFlight(true)
     pendingTransportEventRef.current = null
@@ -530,7 +582,13 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     markPlayingStopped()
     // Do not pad an abandoned performance to the original song duration. Its
     // MIDI and reference snapshot deliberately end at the same observed window.
-    const recording = stopRecording(songTimeSec)
+    let recording: { midiBytes: Uint8Array; performanceEvents: PerformanceEventsAudit }
+    try {
+      recording = stopRecording(songTimeSec)
+    } catch (error) {
+      console.error('[Challenge] Recording serialization failed; product result is independent', error)
+      recording = { midiBytes: new Uint8Array(), performanceEvents: { schemaVersion: 1, events: [], transportSegments: [] } }
+    }
     if (stopPlayback) {
       // Flags the playing → stopped transition below as user-initiated. Only valid when we
       // actually stop the transport; setting it otherwise would swallow the next natural finish.
@@ -685,11 +743,18 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
   const performanceAreaRef = useRef<HTMLDivElement>(null)
   const canChangeMidi = () => {
     const reason = midiSettingsBlockReason({
-      playing: player.isPlaying(), countingDown: player.isCountingDown(), recording: isRecordingMidi,
+      playing: player.isPlaying(),
+      countingDown: player.isCountingDown(),
+      recording: isRecordingMidi,
       finalizing: terminalFlowInFlightRef.current,
-      openNotes: Boolean(midiState.getPressedNotes().size || hasOpenNotes() || player.midiPressedNotes.size),
+      openNotes: Boolean(
+        midiState.getPressedNotes().size || hasOpenNotes() || player.midiPressedNotes.size,
+      ),
     })
-    if (reason) { showToast(reason); return false }
+    if (reason) {
+      showToast(reason)
+      return false
+    }
     return true
   }
   const openMidiSettings = () => {
@@ -701,17 +766,27 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     let access: MIDIAccess | undefined
     const disconnected = (event: MIDIConnectionEvent) => {
       const port = event.port
-      if (port?.type !== 'input' || port.state !== 'disconnected' || !isInputMidiDeviceEnabled(port as MIDIInput)) return
+      if (
+        port?.type !== 'input' ||
+        port.state !== 'disconnected' ||
+        !isInputMidiDeviceEnabled(port as MIDIInput)
+      )
+        return
       if (playerState.playing || playerState.countingDown) handleTogglePlayingChallenge()
       for (const note of Array.from(midiState.getPressedNotes().keys())) midiState.release(note)
-      showToast('MIDI input disconnected. Challenge paused; reconnect and release all notes before continuing.')
+      showToast(
+        'MIDI input disconnected. Challenge paused; reconnect and release all notes before continuing.',
+      )
     }
     if (navigator.requestMIDIAccess) {
-      void navigator.requestMIDIAccess().then(value => {
-        if (disposed) return
-        access = value
-        access.addEventListener('statechange', disconnected)
-      }).catch(() => {})
+      void navigator
+        .requestMIDIAccess()
+        .then((value) => {
+          if (disposed) return
+          access = value
+          access.addEventListener('statechange', disconnected)
+        })
+        .catch(() => {})
     }
     return () => {
       disposed = true
@@ -720,7 +795,12 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
   }, [playerState.playing, playerState.countingDown])
 
   const spaceShortcut = useRef(createChallengeSpaceShortcut()).current
-  useEventListener<KeyboardEvent>('keyup', spaceShortcut.keyup, globalThis, challengeKeyboardOptions)
+  useEventListener<KeyboardEvent>(
+    'keyup',
+    spaceShortcut.keyup,
+    globalThis,
+    challengeKeyboardOptions,
+  )
   useEventListener('blur', spaceShortcut.reset)
   // Capture before focused React Aria toolbar buttons consume Space. Toasts
   // are notifications; only interactive/terminal UI blocks transport shortcuts.
@@ -729,7 +809,10 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
     (evt: KeyboardEvent) => {
       spaceShortcut.keydown(
         evt,
-        isMidiOpen || terminalFlowInFlightRef.current || showSuccessModal || Boolean(localAlignment),
+        isMidiOpen ||
+          terminalFlowInFlightRef.current ||
+          showSuccessModal ||
+          Boolean(localAlignment),
         () => {
           if (isConfirmExitOpen) {
             setIsConfirmExitOpen(false)
@@ -740,7 +823,9 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
               challengeAssignmentRef.current = null
               recordedTransportStartedRef.current = false
             }
-            requestChallengeTransport(recordedTransportStartedRef.current ? 'resumed' : 'play_started')
+            requestChallengeTransport(
+              recordedTransportStartedRef.current ? 'resumed' : 'play_started',
+            )
             return
           }
           handleTogglePlayingChallenge()
@@ -924,10 +1009,14 @@ function ChallengeAttempt({ source, id }: { source: SongSource; id: string }) {
         </div>
       </div>
 
-      <MidiModal isOpen={isMidiOpen} canChangeSettings={canChangeMidi} onClose={() => {
-        setIsMidiOpen(false)
-        requestAnimationFrame(() => performanceAreaRef.current?.focus())
-      }} />
+      <MidiModal
+        isOpen={isMidiOpen}
+        canChangeSettings={canChangeMidi}
+        onClose={() => {
+          setIsMidiOpen(false)
+          requestAnimationFrame(() => performanceAreaRef.current?.focus())
+        }}
+      />
       {isConfirmExitOpen && !isMidiOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50">
           <div className="w-80 rounded-lg bg-[#1b1c23] p-6 text-sm text-white">
