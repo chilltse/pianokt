@@ -148,13 +148,11 @@ resource "google_project_service_identity" "pubsub" {
   depends_on = [google_project_service.enabled]
 }
 resource "google_storage_bucket_iam_member" "archive_create" {
+  # Pub/Sub validates destination permissions at bucket scope. An object-prefix
+  # condition can fail that check; the subscription controls the output prefix.
   bucket = google_storage_bucket.data["raw"].name
   role   = "roles/storage.objectCreator"
   member = "serviceAccount:${google_project_service_identity.pubsub.email}"
-  condition {
-    title      = "v3-namespace"
-    expression = "resource.name.startsWith('projects/_/buckets/${google_storage_bucket.data["raw"].name}/objects/raw/events/')"
-  }
 }
 resource "google_storage_bucket_iam_member" "archive_bucket" {
   bucket = google_storage_bucket.data["raw"].name

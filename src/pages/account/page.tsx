@@ -1,29 +1,16 @@
 import { AppBar, MarketingFooter, Sizer } from '@/components'
 import { AvatarUploadZone } from '@/components/AvatarUploadZone'
 import { useAuth, useRequireAuth, updateProfile } from '@/features/auth'
-import {
-  listChallengeRecordings,
-  getBestAccuracyPerSong,
-  isChallengeSuccess,
-} from '@/features/challenge-history'
 import clsx from 'clsx'
 import { ChevronDown } from '@/icons'
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { useNavigate } from 'react-router'
 import { supabase } from '@/features/auth/supabase'
-
-type Stats = {
-  totalChallenges: number
-  avgAccuracy: number
-  challengesPassed: number
-}
 
 export default function AccountPage() {
   const navigate = useNavigate()
   const { user, loading: authLoading } = useRequireAuth('account')
   const { signOut, refreshSession } = useAuth()
-  const [stats, setStats] = useState<Stats | null>(null)
-  const [loadingStats, setLoadingStats] = useState(true)
   const [displayName, setDisplayName] = useState('')
   const [avatarUrl, setAvatarUrl] = useState('')
   const [profileSaving, setProfileSaving] = useState(false)
@@ -39,32 +26,6 @@ export default function AccountPage() {
     if (!user) return
     setDisplayName(user.displayName ?? '')
     setAvatarUrl(user.avatarUrl ?? '')
-  }, [user])
-
-  useEffect(() => {
-    if (!user?.id) return
-    setLoadingStats(true)
-    listChallengeRecordings()
-      .then((res) => {
-        if ('error' in res) return
-        const rows = res.data
-        const totalChallenges = rows.length
-        const bestMap = getBestAccuracyPerSong(rows)
-        let sumAcc = 0
-        let countAcc = 0
-        let passed = 0
-        for (const [, v] of bestMap) {
-          sumAcc += v.bestAccuracy
-          countAcc += 1
-          if (isChallengeSuccess(v.bestAccuracy)) passed += 1
-        }
-        setStats({
-          totalChallenges,
-          avgAccuracy: countAcc > 0 ? sumAcc / countAcc : 0,
-          challengesPassed: passed,
-        })
-      })
-      .finally(() => setLoadingStats(false))
   }, [user])
 
   async function handleSaveProfile(e: React.FormEvent) {
@@ -125,35 +86,6 @@ export default function AccountPage() {
         <AppBar />
         <div className="mx-auto w-full max-w-(--breakpoint-lg) flex-1 px-6 py-10">
           <h1 className="text-2xl font-semibold text-gray-900">Account</h1>
-          <Sizer height={24} />
-
-          {/* Stats */}
-          <section className="rounded-xl border border-amber-100 bg-white p-6 shadow-sm">
-            <h2 className="text-lg font-medium text-gray-900">Your stats</h2>
-            <Sizer height={16} />
-            {loadingStats ? (
-              <p className="text-sm text-gray-500">Loading…</p>
-            ) : stats ? (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-                <div className="rounded-lg bg-amber-50/80 p-4">
-                  <div className="text-2xl font-semibold text-gray-900">{stats.totalChallenges}</div>
-                  <div className="text-xs text-gray-600">Challenges completed</div>
-                </div>
-                <div className="rounded-lg bg-amber-50/80 p-4">
-                  <div className="text-2xl font-semibold text-gray-900">
-                    {stats.avgAccuracy.toFixed(1)}%
-                  </div>
-                  <div className="text-xs text-gray-600">Avg. accuracy (best per song)</div>
-                </div>
-                <div className="rounded-lg bg-amber-50/80 p-4">
-                  <div className="text-2xl font-semibold text-gray-900">{stats.challengesPassed}</div>
-                  <div className="text-xs text-gray-600">Passed (≥90%)</div>
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-gray-500">No challenge data yet.</p>
-            )}
-          </section>
           <Sizer height={24} />
 
           {/* Edit profile — collapsible */}
@@ -267,14 +199,6 @@ export default function AccountPage() {
             <h2 className="text-lg font-medium text-gray-900">Quick links</h2>
             <Sizer height={12} />
             <div className="flex flex-wrap gap-4">
-              {user && (
-                <Link
-                  to={`/recordings/${user.id}`}
-                  className="text-sm font-medium text-amber-700 hover:text-amber-800 hover:underline"
-                >
-                  My recordings
-                </Link>
-              )}
               <button
                 type="button"
                 onClick={() => signOut()}
