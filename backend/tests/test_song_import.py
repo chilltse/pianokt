@@ -164,3 +164,19 @@ def test_cli_dry_run_requires_no_credentials(tmp_path, monkeypatch, capsys):
     output=json.loads(capsys.readouterr().out)
     assert output['status']=='validated' and output['segment_index']==2
     assert output['license']=='verified-license' and 'song_version_id' not in output
+
+
+@pytest.mark.parametrize('start,accepted', [(0, True), (1, True), (1.1, False)])
+def test_catalog_leading_silence_does_not_require_resegmentation(tmp_path, start, accepted):
+    from pianokt_backend.catalog_sync import scan_catalog
+    source = make_midi(tmp_path)
+    midi = mido.MidiFile(source)
+    next(m for t in midi.tracks for m in t if m.type == 'note_on').time = 800  # 1 second at 100 BPM
+    midi.save(tmp_path/'reference.mid')
+    (tmp_path/'segment_001.mid').write_bytes(source.read_bytes())
+    meta = dict(status='accepted',hand_separation_verified=True,title='Fixture',composer='Test',
+                license='test',source_url='https://example.invalid/test',segments=[dict(start_sec=start,end_sec=1.6)])
+    (tmp_path/'metadata.json').write_text(json.dumps(meta))
+    entries,rejected = scan_catalog(tmp_path)
+    assert bool(entries) is accepted
+    assert bool(rejected) is not accepted

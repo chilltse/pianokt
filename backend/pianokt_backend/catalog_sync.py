@@ -28,8 +28,13 @@ def scan_catalog(root):
                     raise ValueError('Segment boundaries require review')
                 identity = hashlib.sha256(json.dumps([full['midi_sha256'],start,end,meta.get('segmentation_version'),meta.get('hand_separation_method')],sort_keys=True).encode()).hexdigest()
                 parts.append(dict(item=midi, identity=identity, start=start,end=end))
-            if not parts or abs(parts[0]['start'])>.001 or abs(parts[-1]['end']-full['duration_ms']/1000)>.1 or any(abs(a['end']-b['start'])>.001 for a,b in zip(parts,parts[1:])):
-                raise ValueError('Segments do not cover the full reference without gaps')
+            import pretty_midi
+            from .segment_contract import validate_segment_bounds
+            reference = pretty_midi.PrettyMIDI(str(path.parent / 'reference.mid'))
+            validate_segment_bounds(
+                (note for track in reference.instruments for note in track.notes),
+                [(part['start'], part['end']) for part in parts],
+            )
             if full['midi_sha256'] in hashes:
                 raise ValueError('Duplicate reference: '+hashes[full['midi_sha256']])
             hashes[full['midi_sha256']] = str(path)

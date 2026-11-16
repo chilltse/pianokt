@@ -6,7 +6,7 @@ import ts from 'typescript'
 function load(file, imports = {}) {
   const exports = {}
   vm.runInNewContext(
-    ts.transpileModule(readFileSync(file, 'utf8'), {
+    ts.transpileModule(readFileSync(file, 'utf8').replaceAll('import.meta.env.DEV', 'true'), {
       compilerOptions: {
         target: ts.ScriptTarget.ES2022,
         module: ts.ModuleKind.CommonJS,

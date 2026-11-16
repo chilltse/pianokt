@@ -54,6 +54,9 @@ def audit(producer, repository, staging=None):
                 row['reason'] = 'requires_one_or_two_tracks_with_distinct_mean_pitch'
             else:
                 bounds, reason = ([(0, pm.get_end_time(), {})], None) if pm.get_end_time() <= 50 else phrase_v5.segment_bounds(pm, {'L': hands.get('L', pretty_midi.Instrument(0)), 'R': hands['R']})
+                if not reason:
+                    from pianokt_backend.segment_contract import validate_segment_bounds
+                    validate_segment_bounds((n for track in pm.instruments for n in track.notes), [(a,b) for a,b,_ in bounds])
                 if reason: row['reason'] = reason
                 else:
                     row.update(status='ready_for_listening_review', segmentation_version='phrase_v5', hand_separation_verified=True,

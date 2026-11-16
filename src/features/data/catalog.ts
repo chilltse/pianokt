@@ -118,6 +118,11 @@ export const loadOfficialMidi = createMidiLoader(binaryStore, async (path) => {
 export async function fetchFullSongCatalog(): Promise<SongMetadata[]> {
   if (!supabase) throw new Error('Supabase song catalog is not configured')
   const { data, error } = await supabase.rpc('piano_public_full_song_catalog')
+  if (error?.code === 'PGRST202') {
+    throw new Error(
+      'Entire Song catalog is unavailable: apply migration 023_full_song_catalog.sql to the configured Supabase project, then reload the PostgREST schema cache.',
+    )
+  }
   if (error) throw error
   return (data as CatalogRow[]).map(row => {
     if (!uuid.test(row.song_id) || !/^[a-f0-9]{64}$/.test(row.midi_sha256) || row.storage_path !== `midi/${row.midi_sha256}.mid` || !(row.duration_ms > 0)) throw new Error('Invalid full song resource')

@@ -5,7 +5,7 @@ import ts from 'typescript'
 
 function load(file, imports, extra = '') {
   const exports = {}
-  vm.runInNewContext(ts.transpileModule(readFileSync(file, 'utf8') + extra, {
+  vm.runInNewContext(ts.transpileModule(readFileSync(file, 'utf8').replaceAll('import.meta.env.DEV', 'true') + extra, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText, { exports, require: name => imports[name] ?? {}, crypto, Uint8Array, DOMException, AbortSignal, setTimeout })
   return exports

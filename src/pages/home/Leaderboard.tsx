@@ -43,7 +43,10 @@ export function Leaderboard() {
   const refetch = () => {
     fetchLeaderboard(sortByRef.current).then((result) => {
       if ('error' in result) setError(result.error)
-      else setData(result.data)
+      else {
+        setError(null)
+        setData(result.data)
+      }
     })
   }
 
@@ -56,6 +59,11 @@ export function Leaderboard() {
       else setData(result.data)
     })
   }, [sortBy])
+
+  useEffect(() => {
+    window.addEventListener('pianokt-product-result-synced', refetch)
+    return () => window.removeEventListener('pianokt-product-result-synced', refetch)
+  }, [])
 
   useEffect(() => {
     if (!supabase) return

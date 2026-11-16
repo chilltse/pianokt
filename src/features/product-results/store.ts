@@ -27,6 +27,7 @@ export async function syncProductResults(owner: string) {
     if (row.owner !== owner || row.scope !== scope || row.synced) continue
     try {
       await backendRequest('/product-results', row.result, owner)
+      window.dispatchEvent(new Event('pianokt-product-result-synced'))
       await update(key, (value: Record | undefined) => ({ ...(value ?? row), synced: true }), store)
     } catch {
       /* Durable retry; research delivery has an independent lifecycle. */

@@ -27,4 +27,6 @@ create function public.piano_public_full_song_catalog() returns jsonb language s
 $$;
 revoke all on function public.piano_public_full_song_catalog() from public;
 grant execute on function public.piano_public_full_song_catalog() to anon,authenticated;
+-- Delivered after commit so PostgREST discovers the new zero-argument RPC.
+notify pgrst, 'reload schema';
 commit;

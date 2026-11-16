@@ -1,10 +1,10 @@
-import challengeScoring from '../../../shared/challenge-scoring.json'
 import { supabase } from '@/features/auth/supabase'
 import type {
   ChallengeRecordingRow,
   LeaderboardEntry,
   UserPlayLogRow,
 } from '@/features/challenge-history/types'
+import challengeScoring from '../../../shared/challenge-scoring.json'
 import { backendRequest } from './gcs'
 
 const BUCKET = 'challenge-recordings'
@@ -34,6 +34,7 @@ export async function fetchLeaderboard(
 
   const { data, error } = await supabase.rpc('get_product_leaderboard', {
     sort_by: sortBy,
+    target_environment: import.meta.env.DEV ? 'development' : 'production',
   })
 
   if (error) {
