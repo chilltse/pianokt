@@ -34,6 +34,10 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 backend/.env
+download_pianokt_songs.py
+tmp/
+tests/
+docs/
 
 # Terraform
 **/.terraform/
