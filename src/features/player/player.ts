@@ -1,4 +1,4 @@
-import alignmentPolicy from '../../../backend/pianokt_backend/alignment/alignment_policies/versions/v1_0_0.json'
+import assessmentPolicy from '../../../backend/pianokt_backend/alignment/assessment_policies/versions/v1_0_0.json'
 // TODO: handle when users don't have an AudioContext supporting browser
 import { getSynthStub, InstrumentName } from '@/features/synth'
 import { transposeMidi } from '@/features/theory'
@@ -13,8 +13,8 @@ function increment(x: number) {
 }
 
 type JotaiStore = ReturnType<typeof getDefaultStore>
-const GOOD_RANGE = alignmentPolicy.correct_threshold_ms
-const PERFECT_RANGE = alignmentPolicy.perfect_threshold_ms
+const GOOD_RANGE = assessmentPolicy.timing.max_tolerance_ms
+const PERFECT_RANGE = assessmentPolicy.timing.perfect_threshold_ms
 const DEFAULT_BPM = 120
 const DEFAULT_TIME_SIGNATURE = { numerator: 4, denominator: 4 }
 
@@ -119,7 +119,7 @@ export class Player {
     let missedNotes = 0
     for (const [midiNote, missedNote] of this.lateNotes.entries()) {
       const diff = this.calcDiff(this.currentSongTime, missedNote.time)
-      if (diff > GOOD_RANGE) {
+      if (diff > GOOD_RANGE + 1e-9) {
         this.lateNotes.delete(midiNote)
         missedNotes++
         this.missedNotes.add(missedNote)
@@ -158,10 +158,10 @@ export class Player {
       const currentTime = this.currentSongTime
       this.lateNotes.delete(midiNote)
       const diff = this.calcDiff(currentTime, lateNote.time)
-      const isHit = Math.abs(diff) <= GOOD_RANGE
-      if (Math.abs(diff) <= PERFECT_RANGE) {
+      const isHit = Math.abs(diff) <= GOOD_RANGE + 1e-9
+      if (isHit && Math.abs(diff) <= PERFECT_RANGE) {
         this.store.set(this.score.perfect, increment)
-      } else if (Math.abs(diff) <= GOOD_RANGE) {
+      } else if (isHit) {
         this.store.set(this.score.good, increment)
       }
       if (isHit) {
@@ -180,7 +180,7 @@ export class Player {
     )
     if (nextNote && !isHitNote(this, nextNote)) {
       const diff = this.calcDiff(nextNote.time, this.currentSongTime)
-      if (Math.abs(diff) <= GOOD_RANGE) {
+      if (Math.abs(diff) <= GOOD_RANGE + 1e-9) {
         Math.abs(diff) <= PERFECT_RANGE
           ? this.store.set(this.score.perfect, increment)
           : this.store.set(this.score.good, increment)

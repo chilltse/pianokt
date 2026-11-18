@@ -44,7 +44,7 @@ def validate_reference_alignment_consistency(features, frame):
 
 
 def build_attempt_events_data(features, df, timing_threshold_ms=150,
-                              insertion_attach_window_sec=.25) -> dict[str, Any]:
+                              insertion_attach_window_sec=.25, event_accuracy_threshold=1.0) -> dict[str, Any]:
     validate_reference_alignment_consistency(features, df)
     rows = {row['ref_id']: row for row in df.to_dict('records') if row['alignment_type'] != 'insertion'}
     events = features.events
@@ -92,6 +92,12 @@ def build_attempt_events_data(features, df, timing_threshold_ms=150,
                 pitches=[e['pitches'] for e in events], intervals_seconds=[e['intervals'] for e in events],
                 kc_vectors=[e['vector'] for e in events], reject_reason=dict(event=labels, note=notes),
                 timing_offset_ms=timings, pitch_offset_semitones=deltas, extra_notes=[sorted(x) for x in extras])
+    data["event_accuracy"] = [
+        sum(code == 0 for hand in note for code in hand) /
+        (sum(len(hand) for hand in note) + len(extra))
+        for note, extra in zip(notes, extras)
+    ]
+    data["correct"] = [int(value >= event_accuracy_threshold) for value in data["event_accuracy"]]
     from ..pipeline.attempts import validate_events
     validate_events(data)
     return data

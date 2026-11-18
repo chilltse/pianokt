@@ -17,6 +17,14 @@ def classify_matched_note(
         if pitch_offset != 0:
             pitch_error = True
 
+    if "early_tolerance_ms" in row:
+        from math import isfinite
+        deviation = row.get(timing_dev_col)
+        valid = pd.notna(deviation) and isfinite(float(deviation))
+        limit = row.get("early_tolerance_ms" if valid and deviation < 0 else "late_tolerance_ms")
+        timing_error = not valid or not pd.notna(limit) or abs(float(deviation) * 1000) > limit + 1e-9
+        return 4 if pitch_error and timing_error else 2 if pitch_error else 3 if timing_error else 0
+
     # 时间错误。
     timing_error = False
     if pd.notna(row.get(timing_dev_col)):

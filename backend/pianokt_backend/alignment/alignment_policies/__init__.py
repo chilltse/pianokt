@@ -2,7 +2,7 @@
 import json
 from importlib.resources import files
 
-DEFAULT_ALIGNMENT_VERSION = "1.0.0"
+DEFAULT_ALIGNMENT_VERSION = "2.0.0"
 
 
 def resolve_alignment_version(version=None):
@@ -14,5 +14,5 @@ def resolve_alignment_version(version=None):
 
 def load_alignment_policy(version=None):
     resolve_alignment_version(version)
-    return json.loads(files(__package__).joinpath("versions/v1_0_0.json").read_text())
+    return json.loads(files(__package__).joinpath("versions", "v2_0_0.json").read_text())
 

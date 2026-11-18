@@ -83,7 +83,7 @@ class CommittedResults:
                              for key in ('song_id','segment_id','segment_index','midi_sha256') if key in row})
             if any(result.get(k) != v for k, v in expected.items()):
                 raise ValueError(f'Committed result identity/schema mismatch: {aid}')
-            for field in ('alignment_version','matcher_version','reference_grouping_version','kc_labeler_version'):
+            for field in ('assessment_version','assessment_implementation','alignment_version','matcher_version','reference_grouping_version','kc_labeler_version'):
                 if field in row and result.get(field) != row[field]:
                     raise ValueError('Committed version mismatch: ' + field)
             if 'telemetry_hash' in row and result.get('performance_events_hash') != row['telemetry_hash']:

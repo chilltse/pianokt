@@ -195,11 +195,14 @@ def correct_offset(
 
 
 def configured_labels(config: AlignmentConfig):
+    from .assessment_policies import load_assessment_policy
+    threshold = load_assessment_policy(config.assessment_version)["event_accuracy"]["threshold"]
     return SimpleNamespace(
         KC_FEATURE_NAMES=events.KC_FEATURE_NAMES,
         combine_reject_reasons=note_labels.combine_reject_reasons,
         build_attempt_events_data=partial(events.build_attempt_events_data,
-            timing_threshold_ms=config.timing_threshold_ms,insertion_attach_window_sec=config.insertion_attach_window_sec),
+            timing_threshold_ms=config.timing_threshold_ms,insertion_attach_window_sec=config.insertion_attach_window_sec,
+            event_accuracy_threshold=threshold),
         classify_matched_note=partial(note_labels.classify_matched_note,timing_threshold_ms=config.timing_threshold_ms),
     )
 
@@ -385,10 +388,11 @@ def align(
             max_alignment_cells=config.max_alignment_cells,
         )
 
-    raw = pd.DataFrame(
-        rows_from_operations(reference_chords, performance_chords, operations, config.wrong_pitch_window_sec),
-        columns=_RAW_COLUMNS,
-    )
+    rows = rows_from_operations(reference_chords, performance_chords, operations, config.wrong_pitch_window_sec)
+    if config.additive_rescue_window_sec and not non_monotonic_transport:
+        from .additive_rescue import rescue_rows
+        rows = rescue_rows(rows, config.additive_rescue_window_sec)
+    raw = pd.DataFrame(rows, columns=_RAW_COLUMNS)
     raw_records = alignment_records(raw)
     if audit.supplied:
         # This is the essential semantics change: do not calibrate away a
@@ -440,6 +444,9 @@ def align(
                     if reference_chords else {"left": None, "right": None})
     features = extract_reference_features(reference_chords, hand_mapping,
                                           kc_labeler_version=kc_labeler_version)
+    from .assessment import assess_tolerances
+    from .assessment_policies import load_assessment_policy
+    df = assess_tolerances(df, [e["onset"] for e in features.events], load_assessment_policy(config.assessment_version))
     hands = labels.build_attempt_events_data(features, df)
     # Error codes belong exclusively to target score notes. An insertion is an
     # extra performance note, so it has no target-note reject_reason; it is
@@ -516,6 +523,8 @@ def align(
         })
     return {
         "alignment_version": config.version, "reference_grouping_version": config.reference_grouping_version,
+        "assessment_version": config.assessment_version,
+        "assessment_implementation": "note-ioi-event-accuracy-v1",
         "schema_version": 3, "kc_labeler_version": features.kc_labeler_version, "alignment_run_id": run_id, "attempt_id": attempt_id,
         "score_version": score_hash, "performance_hash": performance_hash,
         "config": config.identity, "matcher_version": matcher_version(),

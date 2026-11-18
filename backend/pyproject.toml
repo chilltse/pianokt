@@ -17,4 +17,4 @@ include = ["pianokt_backend*"]
 testpaths = ["tests"]
 
 [tool.setuptools.package-data]
-pianokt_backend = ["alignment/reference_grouping/versions/*.json", "alignment/alignment_policies/versions/*.json"]
+pianokt_backend = ["alignment/assessment_policies/versions/*.json", "alignment/reference_grouping/versions/*.json", "alignment/alignment_policies/versions/*.json"]

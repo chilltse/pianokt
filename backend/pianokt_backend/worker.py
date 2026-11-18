@@ -1,4 +1,6 @@
 from .storage_layout import DATA_ARCHITECTURE_VERSION, silver_result_key, silver_matches_key
+from .alignment.alignment_policies import DEFAULT_ALIGNMENT_VERSION
+
 from .run_registry import register_run, result_bytes
 from .accuracy import backend_event_accuracy
 import json
@@ -249,7 +251,7 @@ def process(attempt_id):
     try:
         settings=row['metadata'].get('settings',{}) if isinstance(row.get('metadata'),dict) else {}
         observed_end_sec,reference_origin_sec=_alignment_window(settings)
-        config=AlignmentConfig(version=settings.get('alignment_version', '1.0.0'),
+        config=AlignmentConfig(version=settings.get('alignment_version', DEFAULT_ALIGNMENT_VERSION),
                                reference_grouping_version=settings.get('reference_grouping_version', '1.0.0'))
         # The result key itself is the immutable crash-recovery marker. It is
         # impossible for a legacy Parangonar manifest to pin this matcher to a

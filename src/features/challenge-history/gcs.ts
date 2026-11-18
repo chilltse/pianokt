@@ -1,4 +1,4 @@
-import alignmentPolicy from '../../../backend/pianokt_backend/alignment/alignment_policies/versions/v1_0_0.json'
+import alignmentPolicy from '../../../backend/pianokt_backend/alignment/alignment_policies/versions/v2_0_0.json'
 import type { Activity } from '@/features/activity'
 import { supabase } from '@/features/auth/supabase'
 import { indexedUploadStore, UploadQueue, type PendingUpload } from './upload-queue'

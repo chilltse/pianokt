@@ -4,7 +4,6 @@ import type {
   LeaderboardEntry,
   UserPlayLogRow,
 } from '@/features/challenge-history/types'
-import challengeScoring from '../../../shared/challenge-scoring.json'
 import { backendRequest } from './gcs'
 
 const BUCKET = 'challenge-recordings'
@@ -134,7 +133,7 @@ export async function listUserPlayLogs(): Promise<{ data: UserPlayLogRow[] } | {
   }
 }
 
-export const CHALLENGE_SUCCESS_PCT = challengeScoring.success_threshold_pct
+export const CHALLENGE_SUCCESS_PCT = 80
 
 /**
  * 判断一次 Challenge 是否成功。

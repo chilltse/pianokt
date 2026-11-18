@@ -1,5 +1,7 @@
 """Explicit research runs; never mutate online pointers, scores, outbox or KT state."""
 from tempfile import TemporaryDirectory
+from .alignment.alignment_policies import DEFAULT_ALIGNMENT_VERSION
+
 from .contracts import AlignmentConfig
 from .alignment.feature_extraction import resolve_kc_version
 from .online import connect
@@ -9,7 +11,7 @@ from .upload_validation import validate_files
 from .worker import build_silver
 
 
-def reprocess(objects, attempt_ids, environment, *, alignment_version='1.0.0',
+def reprocess(objects, attempt_ids, environment, *, alignment_version=DEFAULT_ALIGNMENT_VERSION,
               reference_grouping_version='1.0.0', kc_labeler_version=None, dry_run=False):
     environment = export_environment(environment)
     config = AlignmentConfig(version=alignment_version, reference_grouping_version=reference_grouping_version)

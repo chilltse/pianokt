@@ -4,6 +4,8 @@ import logging
 import os
 import uuid
 from pathlib import Path
+from .alignment.alignment_policies import DEFAULT_ALIGNMENT_VERSION
+
 from .storage import Objects
 
 def main():
@@ -30,7 +32,7 @@ def main():
     a=sub.add_parser('reprocess', help='Explicit research-only processing; no online promotion')
     a.add_argument('--attempt-id', action='append', required=True, type=uuid.UUID)
     a.add_argument('--environment', required=True, choices=('production','development','test','staging'))
-    a.add_argument('--alignment-version', default='1.0.0')
+    a.add_argument('--alignment-version', default=DEFAULT_ALIGNMENT_VERSION)
     a.add_argument('--reference-grouping-version', default='1.0.0')
     a.add_argument('--kc-labeler-version')
     a.add_argument('--dry-run', action='store_true')
