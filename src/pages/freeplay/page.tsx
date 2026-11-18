@@ -52,7 +52,7 @@ export default function FreePlay() {
     <>
       <title>Free Play</title>
       <div
-        className="flex h-screen w-screen flex-col outline-none"
+        className="flex min-h-0 flex-col outline-none fixed inset-safe h-full w-full"
         {...midiState.getListenerProps()}
         autoFocus
       >
@@ -86,7 +86,7 @@ export default function FreePlay() {
           songMeta={{ source: 'base64', id: recordingPreview }}
           instrument={instrumentName}
         />
-        <div className="relative grow">
+        <div className="relative min-h-0 flex-1">
           <SongVisualizer
             song={freePlayer.song}
             config={

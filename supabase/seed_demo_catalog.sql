@@ -1,0 +1,4 @@
+-- There are no metadata-only demo songs: published entries must reference
+-- verified MIDI objects. Use `pianokt-data import-song ...` after migration 018.
+-- For the optional archived samples: python scripts/import_song_catalog.py --apply
+-- Importing actual MIDI is the single publication path for every catalog entry.

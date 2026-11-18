@@ -81,7 +81,7 @@ export default function ManageFoldersForm({ onClose }: { onClose: () => void }) 
 
         <button
           onClick={onClose}
-          className="w-full cursor-pointer rounded-md bg-violet-600 py-2 text-white transition hover:bg-violet-700"
+          className="w-full cursor-pointer rounded-md bg-gray-800 py-2 text-white transition hover:bg-gray-700"
         >
           Close
         </button>
@@ -111,7 +111,7 @@ export default function ManageFoldersForm({ onClose }: { onClose: () => void }) 
           </button>
           <button
             onClick={addFolder}
-            className="flex cursor-pointer items-center justify-center gap-2 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-700"
+            className="flex cursor-pointer items-center justify-center gap-2 rounded-md bg-gray-800 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-gray-700"
           >
             <Plus className="h-4 w-4" />
             Add Folder

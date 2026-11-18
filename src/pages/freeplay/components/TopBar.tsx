@@ -30,7 +30,7 @@ export default function TopBar({
   const recordTooltip = isRecordingAudio ? 'Stop recording' : 'Start recording audio'
 
   return (
-    <div className="relative z-10 h-14 w-screen border-b border-[#20222a] bg-[#15161b] px-4">
+    <div className="relative z-10 h-14 w-full shrink-0 border-b border-[#20222a] bg-[#15161b] px-4">
       <div className="flex h-full items-center gap-4 text-white">
         <ButtonWithTooltip tooltip="Back">
           <Link to="/">

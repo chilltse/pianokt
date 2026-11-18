@@ -1,14 +1,14 @@
 import { AppBar, MarketingFooter, Sizer } from '@/components'
 import React, { PropsWithChildren } from 'react'
 import { Link, LinkProps } from 'react-router'
-import manifest from './../../manifest.json'
+import { useSongManifest } from '@/features/data/library'
 import type { SongMetadata } from './../../types'
 import { Article, CaptionedImage } from './components'
 import { slugify } from './utils'
 
 function SidebarLink({ children }: PropsWithChildren<{ children: string }>) {
   return (
-    <a className="hover:text-purple-hover" href={`#${slugify(children)}`}>
+    <a className="hover:text-amber-800" href={`#${slugify(children)}`}>
       {children}
     </a>
   )
@@ -16,12 +16,12 @@ function SidebarLink({ children }: PropsWithChildren<{ children: string }>) {
 
 export default function AboutPage() {
   return (
-    <div className="relative">
+    <div className="relative bg-paper bg-amber-50/70 min-h-screen">
       <title>About</title>
       <AppBar />
-      <div className="md:bg-purple-lightest">
+      <div className="bg-paper bg-amber-50/70">
         <div className="mx-auto flex max-w-(--breakpoint-lg)">
-          <div className="sticky top-0 hidden max-h-screen p-8 md:block">
+          <div className="sticky top-0 hidden max-h-screen p-8 lg:block">
             <section className="mx-auto flex flex-col">
               <h2 className="text-3xl">About</h2>
               <Sizer height={32} />
@@ -39,13 +39,7 @@ export default function AboutPage() {
                   <SidebarLink>Browser compatibility</SidebarLink>
                 </li>
                 <li>
-                  <SidebarLink>Roadmap</SidebarLink>
-                </li>
-                <li>
                   <SidebarLink>Feedback</SidebarLink>
-                </li>
-                <li>
-                  <SidebarLink>Product recommendations</SidebarLink>
                 </li>
                 <li>
                   <SidebarLink>Attributions</SidebarLink>
@@ -59,9 +53,7 @@ export default function AboutPage() {
               <GettingStarted />
               <MusicSelectionSection />
               <BrowserCompatibilitySection />
-              <RoadmapSection />
               <FeedbackSection />
-              <ProductRecommendations />
               <AttributionsSection />
             </div>
           </div>
@@ -76,12 +68,20 @@ function WhatSection() {
   return (
     <Article
       header="What"
-      first="Sightread is a free and open-source webapp for learning to play Piano."
+      first="PianoKT is a free and open-source webapp for learning to play piano."
     >
       <p>
-        Sightread is great for beginners – you can play songs without needing to learn sheet music.
-        Sightread creates an intuitive <span className="italic">Falling Notes</span> visualization
+        PianoKT is great for piano lovers, you can take a challenge and analyse the skill status and get the most fit recommendations.
+        PianoKT has an intuitive <span className="italic">Falling Notes</span> visualization
         of a song, similar to rhythm games like Guitar Hero.
+      </p>
+      <p>
+        This project is also a research project of Australian National University Social Machine Lab.
+        There will be no audio recording, the midi-typing events will be recorded as midi-files.
+        The midi data will be fully anonymised and used for the research purpose. Your contribution is greatly appreciated by the community and we work hard to present the research results in the future.
+      </p>
+      <p>
+        Thanks to the Sightread team for the skeleton of the app.
       </p>
       <Sizer height={8} />
       <CaptionedImage
@@ -93,12 +93,12 @@ function WhatSection() {
       />
       <Sizer height={24} />
       <p>
-        For those who want to learn sheet music, Sightread offers{' '}
+        For those who want to learn sheet music, PianoKT offers{' '}
         <span className="italic">Sheet Hero (beta)</span> mode. Sheet Hero is a halfway point
         between the simplicity of falling notes and the full complexity of sheet music. Notes are
         laid out on a musical staff, but timing is simplified. Sheet Hero represents the duration of
         notes with a tail instead of beat denominations. Key signatures are also optional in this
-        mode. Sightread will by default display a song in it’s original key, but you may change the
+        mode. PianoKT will by default display a song in it’s original key, but you may change the
         key to any that you prefer.
       </p>
       <Sizer height={8} />
@@ -116,8 +116,8 @@ function GettingStarted() {
   return (
     <Article header="Getting started" first="Plug in a keyboard. Start slow. Gradually speed up.">
       <p>
-        When initially learning a song, we recommend learning left and right hands separately. You
-        should also take advantage of the BPM modifier to slow down a song by at least 50%. It is
+        When initially learning a song, we rececommend you to start with <strong>Practice a song</strong>.
+        You should also take advantage of the BPM modifier to slow down a song by at least 50%. It is
         significantly more helpful to hit the right notes with good form and slowly build up speed
         than to frantically practice at full speed and build bad habits. This is especially true
         when combining hands.
@@ -127,10 +127,10 @@ function GettingStarted() {
         the song will wait for you to hit the right key before progressing.
       </p>
       <p>
-        Sightread works best in conjunction with a Piano teacher. Falling notes will allow you to
-        have more fun with less experience, but it is no replacement for formal education. Learning
-        music theory will help you get a more holistic music experience than learning solely
-        learning how to play songs.
+        When you feel you are ready to take a challenge, you can go to the <strong>Take a challenge</strong> page and take a challenge.
+        The challenge will be a set of songs that are designed to test your skills.
+        You will be given a score based on your performance.
+        Your performance will also be used to determine your skill level and the most fit recommendations.
       </p>
     </Article>
   )
@@ -140,10 +140,10 @@ function MusicSelectionSection() {
   return (
     <Article
       header="Music selection"
-      first="The Sightread catalog has two components: builtin and local file uploads."
+      first="The PianoKT catalog has two components: builtin and local file uploads."
     >
-      <p>Sightread includes music from the public domain.</p>
-      <p>You can upload MIDI files directly to Sightread which saves them in browser storage.</p>
+      <p>PianoKT includes music from the public domain.</p>
+      <p>You can upload MIDI files directly to PianoKT which saves them in browser storage.</p>
     </Article>
   )
 }
@@ -152,7 +152,7 @@ function BrowserCompatibilitySection() {
   return (
     <Article
       header="Browser compatibility"
-      first="Sightread is fully compatible with the latest versions of Chrome and Firefox."
+      first="PianoKT is fully compatible with the latest versions of Chrome and Firefox."
     >
       <p>
         Plugging in a MIDI keyboard will not work on iOS or Safari. This is because Apple has not
@@ -164,77 +164,23 @@ function BrowserCompatibilitySection() {
   )
 }
 
-function RoadmapSection() {
-  return (
-    <Article header="Roadmap">
-      <p>
-        We have so many exciting ideas, but we have full time jobs so progress is slow. Things we
-        plan to implement in future releases:
-      </p>
-      <ul className="list-disc px-12">
-        <li>iOS App</li>
-        <li>MusicXML file upload and full Sheet Music display.</li>
-        <li>Progress tracking and song scoring to see improvement over time.</li>
-        <li>
-          Difficulty scaling for algorithmically scaling the difficulty of a song up and down.
-        </li>
-        <li>Record a performance in free play and share it with a link.</li>
-        <li>Small training tools and games.</li>
-      </ul>
-    </Article>
-  )
-}
-
 function FeedbackSection() {
   return (
     <Article header="Feedback">
       <p>
         Found a bug or have a feature request? Please file an issue on{' '}
-        <AboutLink to="https://github.com/sightread/sightread/issues">GitHub</AboutLink> or send an{' '}
-        <AboutLink to="mailto:sightreadllc@gmail.com">email</AboutLink>.
-      </p>
-    </Article>
-  )
-}
-
-function ProductRecommendations() {
-  return (
-    <Article
-      header="Product recommendations"
-      first="Looking for a Sightread-compatible keyboard? We've got you covered."
-    >
-      <p>
-        Sightread needs a keyboard with MIDI-out, usually via USB or Bluetooth. We recommend opting
-        for USB connection because Sightread is latency-sensitive.
-      </p>
-
-      <ol className="ml-8 list-disc">
-        <li>
-          <b>Beginner:</b> The{' '}
-          <AboutLink to="https://www.amazon.com/Casio-61-Key-Portable-Keyboard-LK-S250/dp/B07WK7F7BF?ref_=ast_sto_dp&amp;th=1&_encoding=UTF8&tag=sightread-20&linkCode=ur2&linkId=19d0e41a202a32254091e6bafcae1b13&camp=1789&creative=9325">
-            Casio Casiotone LK-S250
-          </AboutLink>{' '}
-          has 66 light-up keys which can aid learning.
-        </li>
-        <li>
-          <b>Intermediate:</b> The{' '}
-          <AboutLink to="https://www.amazon.com/Roland-keys-Digital-Piano-GO-88P/dp/B07M9WFSTK?th=1&_encoding=UTF8&tag=sightread-20&linkCode=ur2&linkId=1318072a32a3ea63d98c4567c2ed3098&camp=1789&creative=9325">
-            Roland GO:Piano
-          </AboutLink>{' '}
-          has a full range of 88 keys with both Bluetooth and USB connections. It has excellent
-          sound quality and is the keyboard we use ourselves.
-        </li>
-      </ol>
-
-      <p>
-        These are affiliate links, so we earn from purchases. This is our only form of monetization.
+        <AboutLink to="https://github.com/chilltse/pianokt/issues">GitHub</AboutLink> or send an{' '}
+        <a href="mailto:chilltse808@gmail.com" className="text-purple-primary hover:text-purple-hover">
+          email
+        </a>
+        .
       </p>
     </Article>
   )
 }
 
 function AttributionsSection() {
-  const sortedSongs = (manifest as SongMetadata[])
+  const sortedSongs = useSongManifest().filter(song => song.source === 'builtin')
     .slice()
     .sort((a, b) => a.title.localeCompare(b.title))
 

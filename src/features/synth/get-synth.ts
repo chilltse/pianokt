@@ -31,8 +31,12 @@ export async function getSynth(
   if (typeof instrument === 'number') {
     instrument = gmInstruments[instrument]
   }
+  // Normalize display names to IDs (e.g. "acoustic grand piano" -> "acoustic_grand_piano")
+  if (typeof instrument === 'string' && instrument.includes(' ')) {
+    instrument = instrument.toLowerCase().replace(/\s+/g, '_') as InstrumentName
+  }
   if (!isValidInstrument(instrument)) {
-    console.log('Invalid instrument: ', instrument, 'reverting to acoustic_grand_piano.')
+    console.warn('Invalid instrument: ', instrument, 'reverting to acoustic_grand_piano.')
     instrument = gmInstruments[0]
   }
 

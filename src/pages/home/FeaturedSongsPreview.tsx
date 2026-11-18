@@ -1,18 +1,11 @@
+import { useCatalogStatus, useSongManifest } from '@/features/data/library'
 import { usePlayer } from '@/features/player'
 import { SongPreview } from '@/features/SongPreview/SongPreview'
 import { useEventListener, useOnUnmount, usePlayerState } from '@/hooks'
-import useDelayedFlag from '@/hooks/useDelayedFlag'
 import { Pause, Play } from '@/icons'
-import type { SongSource } from '@/types'
 import clsx from 'clsx'
 import { ChevronDown } from 'lucide-react'
 import { useState } from 'react'
-
-const FEATURED_SONGS: { [id: string]: { source: SongSource; id: string } } = {
-  gymnopedie: { source: 'builtin', id: 'gymnopedie-no1.mid' },
-  ode: { source: 'builtin', id: 'ode-to-joy.mid' },
-  canon: { source: 'builtin', id: 'canon-in-d.mid' },
-}
 
 export function FeaturedSongsPreview({
   marginTop = 0,
@@ -22,10 +15,10 @@ export function FeaturedSongsPreview({
   className?: string
 }) {
   const playerState = usePlayerState()
-  const [currentSong, setCurrentSong] = useState<keyof typeof FEATURED_SONGS>('ode')
-  const { id: songId, source } = FEATURED_SONGS[currentSong]
-  const showPlaceholder = !playerState.canPlay
-  const showSpinner = useDelayedFlag(showPlaceholder, 300)
+  const songs = useSongManifest().filter((song) => song.source === 'builtin')
+  const catalog = useCatalogStatus()
+  const [currentSong, setCurrentSong] = useState('')
+  const selected = songs.find((song) => song.id === currentSong) ?? songs[0]
   const player = usePlayer()
 
   useEventListener('keydown', (event: Event) => {
@@ -48,13 +41,17 @@ export function FeaturedSongsPreview({
       )}
       style={{ marginTop }}
     >
-      <SongPreview songId={songId} source={source} />
-      {showPlaceholder && (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#2e2e2e]">
-          {showSpinner && (
-            <div className="h-12 w-12 animate-spin rounded-full border-4 border-white border-t-transparent"></div>
-          )}
-        </div>
+      {selected ? (
+        <SongPreview id={selected.id} source={selected.source} />
+      ) : (
+        <p role="status" className="p-20 text-white">
+          {catalog.error
+            ? '曲库暂时不可用'
+            : catalog.isLoading
+              ? '正在加载曲库…'
+              : '尚无已发布曲目'}
+          {catalog.error && <button onClick={() => void catalog.mutate()}>重试</button>}
+        </p>
       )}
       <div className="absolute top-0 right-0 left-0 z-20 flex h-14 items-center justify-between border-b border-gray-700 bg-gray-800 px-4">
         <div className="flex items-center gap-3">
@@ -63,6 +60,7 @@ export function FeaturedSongsPreview({
               'bg-purple-primary hover:bg-purple-hover flex h-8 w-8 items-center justify-center rounded-full text-white transition',
               !playerState.canPlay && 'cursor-progress',
             )}
+            disabled={!selected || !playerState.canPlay}
             onClick={() => player.toggle()}
           >
             {playerState.playing ? <Pause size={18} /> : <Play size={18} />}
@@ -72,13 +70,17 @@ export function FeaturedSongsPreview({
         <div className="relative text-white">
           <select
             className="appearance-none rounded bg-gray-700 py-1.5 pr-8 pl-3 text-sm font-medium text-gray-200 transition hover:bg-gray-600"
+            value={selected?.id ?? ''}
+            disabled={!selected}
             onChange={(e) => {
-              setCurrentSong(e.target.value as any)
+              setCurrentSong(e.target.value)
             }}
           >
-            <option value="ode">Ode to Joy</option>
-            <option value="canon">Canon in D</option>
-            <option value="gymnopedie">Gymnopédie No.1</option>
+            {songs.map((song) => (
+              <option key={song.id} value={song.id}>
+                {song.title}
+              </option>
+            ))}
           </select>
           <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-gray-300">
             <ChevronDown className="h-4 w-4" />

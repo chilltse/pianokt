@@ -1,0 +1,288 @@
+from .storage_layout import DATA_ARCHITECTURE_VERSION, silver_result_key, silver_matches_key
+from .alignment.alignment_policies import DEFAULT_ALIGNMENT_VERSION
+
+from .run_registry import register_run, result_bytes
+from .accuracy import backend_event_accuracy
+import json
+import math
+import logging
+import os
+import uuid
+from datetime import datetime,timezone
+from tempfile import TemporaryDirectory
+from psycopg.types.json import Jsonb
+from .online import connect
+from .provenance import recording_environment
+from .attempt_context import attempt_context, attach_attempt_context
+from .timing import stage
+from .upload_validation import validate_files, InvalidUpload
+from .projections import project_challenge
+from .upload_contracts import Finalize
+from .storage import Objects
+from .contracts import digest,AlignmentConfig
+from .alignment.service import align,alignment_run_id,matcher_version
+from .alignment.feature_extraction import resolve_kc_version, ReferenceGroupingMismatch
+
+
+def _finite_nonnegative(value,default=None):
+    if isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and value>=0:
+        return float(value)
+    return default
+
+
+def _alignment_window(settings):
+    """Return snapshot-relative observed end and the absolute snapshot origin."""
+    settings=settings if isinstance(settings,dict) else {}
+    observed_payload=settings.get('observed_range',settings.get('range'))
+    if observed_payload is not None and not isinstance(observed_payload,dict):
+        raise ValueError('Observed range must be an object')
+    observed=observed_payload or {}
+    has_start='start' in observed
+    has_end='end' in observed
+    observed_start=_finite_nonnegative(observed.get('start')) if has_start else None
+    observed_end=_finite_nonnegative(observed.get('end')) if has_end else None
+    if (has_start and observed_start is None) or (has_end and observed_end is None):
+        raise ValueError('Observed range must use finite non-negative seconds')
+    if observed_start is not None and observed_end is not None and observed_end < observed_start:
+        raise ValueError('Observed range end precedes start')
+
+    origin_value=settings.get('reference_time_origin_sec')
+    origin=_finite_nonnegative(origin_value)
+    if origin_value is not None and origin is None:
+        raise ValueError('Reference time origin must be finite and non-negative')
+    if origin is None:
+        origin=observed_start if observed_start is not None else 0.0
+    if observed_start is not None and abs(origin-observed_start)>1e-6:
+        raise ValueError('Reference time origin must equal observed range start')
+
+    end=observed_end
+    if end is None and 'played_until_sec' in settings:
+        end=_finite_nonnegative(settings.get('played_until_sec'))
+        if end is None:
+            raise ValueError('Played-until time must be finite and non-negative')
+    if end is not None and end < origin:
+        raise ValueError('Observed range end precedes reference time origin')
+    relative_end=end-origin if end is not None else None
+    return relative_end,origin
+
+
+def _quality(result):
+    diagnostics=result.get('diagnostics') if isinstance(result.get('diagnostics'),dict) else {}
+    summary=result.get('summary') if isinstance(result.get('summary'),dict) else {}
+    valid=diagnostics.get('alignment_quality_valid',summary.get('alignment_quality_valid',False))
+    reason=diagnostics.get('alignment_quality_reason',summary.get('alignment_quality_reason'))
+    return valid is True,str(reason or ('ok' if valid is True else 'alignment_quality_not_valid'))
+
+
+def _read_json_or_none(store,key):
+    try:
+        return json.loads(store.read(key))
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        # Local test storage raises FileNotFoundError; GCS uses this exception.
+        from google.api_core.exceptions import NotFound
+        if isinstance(exc,NotFound):
+            return None
+        raise
+
+
+def _is_current_result(result,row,config,expected_run,observed_end_sec,reference_origin_sec,performance_events,transport_segments,kc_labeler_version=None):
+    """Only reuse an immutable result made by this matcher contract.
+
+    Result keys are derived from the complete matcher identity, including raw
+    MIDI hashes and time telemetry. A retry therefore reads that deterministic
+    result directly; old mutable/legacy attempt manifests are never consulted.
+    """
+    if not isinstance(result,dict):
+        return False
+    context=result.get('alignment_context')
+    if not isinstance(context,dict):
+        return False
+    return (
+        result.get('data_architecture_version') == DATA_ARCHITECTURE_VERSION
+        and result.get('attempt_id')==str(row['id'])
+        and result.get('alignment_run_id')==expected_run
+        and result.get('learner_key')==str(row.get('learner_key'))
+        and result.get('performance_events_hash')==row.get('performance_events_hash')
+        and result.get('song_id')==row.get('song_id')
+        and all(str(result.get(key))==str((row.get('metadata') or {}).get(key))
+                for key in ('segment_id','segment_index','midi_sha256'))
+        and result.get('score_version')==row['reference_hash']
+        and result.get('performance_hash')==row['performance_hash']
+        and result.get('matcher_version')==matcher_version()
+        and result.get('kc_labeler_version')==resolve_kc_version(kc_labeler_version)
+        and result.get('config')==config.identity
+        and result.get('source_environment','unknown')==row.get('source_environment','unknown')
+        and context.get('reference_origin_sec')==reference_origin_sec
+        and context.get('observed_end_sec')==observed_end_sec
+        and context.get('transport_segments_count')==(
+            len(transport_segments) if isinstance(transport_segments,list) else None
+        )
+        and context.get('event_audit_supplied')==(performance_events is not None)
+    )
+
+def commit_alignment(c,attempt_id,lease_token,result_key,result):
+    """Publish READY, authoritative score and outbox in the caller transaction."""
+    current=c.execute('select *, lease_until > clock_timestamp() as lease_active from public.piano_attempts where id=%s for update',(attempt_id,)).fetchone()
+    if not current or str(current['lease_token'])!=lease_token or not current['lease_active']:
+        raise RuntimeError('Worker lease superseded')
+    saved = register_run(c, current, result_key, result, 'online')
+    c.execute("""update public.piano_attempts set data_architecture_version='3',status='READY',
+        result_key=%s,summary=%s,alignment_run_id=%s,result_digest=%s,result_committed_at=%s,
+        error_code=null,lease_until=null,updated_at=now() where id=%s""",
+        (result_key,Jsonb(result['summary']),result['alignment_run_id'],saved['result_digest'],saved['committed_at'],attempt_id))
+    quality_valid,_=_quality(result)
+    accuracy=result['summary'].get('backend_event_accuracy')
+    c.execute("update public.challenge_recordings set accuracy_pct=%s,score_source=%s,accuracy_metric='backend_event_accuracy' where id=%s",
+              (float(accuracy)*100 if quality_valid and accuracy is not None else None,'aligned' if quality_valid and accuracy is not None else 'rejected',attempt_id))
+    payload=dict(event_type='alignment.completed',attempt_id=attempt_id,alignment_run_id=result['alignment_run_id'],result_key=result_key,source_environment=result.get('source_environment','unknown'))
+    c.execute('insert into public.piano_outbox(event_type,aggregate_id,payload) values(%s,%s,%s) on conflict do nothing',('alignment.completed',result['alignment_run_id'],Jsonb(payload)))
+
+def build_silver(store, row, files, telemetry, config, *, kc_labeler_version=None):
+    """Shared online/research processing over hash-verified Raw inputs."""
+    attempt_id = str(row['id'])
+    settings = (row.get('metadata') or {}).get('settings', {})
+    observed_end_sec, reference_origin_sec = _alignment_window(settings)
+    performance_events = (telemetry or {}).get('events')
+    transport_segments = (telemetry or {}).get('transportSegments', [])
+    run=alignment_run_id(
+        files['reference'],files['performance'],attempt_id,config,
+        performance_events,observed_end_sec,transport_segments,reference_origin_sec,
+        kc_labeler_version=kc_labeler_version,
+    )
+    result_key=silver_result_key(run)
+    result=_read_json_or_none(store,result_key)
+    if result is not None and not _is_current_result(
+        result,row,config,run,observed_end_sec,reference_origin_sec,
+        performance_events,transport_segments,kc_labeler_version,
+    ):
+        raise ValueError('Immutable alignment result identity conflict')
+    if result is None:
+        result=align(
+            files['reference'],files['performance'],attempt_id,config,
+            stage_sink=lambda run,data:store.json(silver_matches_key(run),data),
+            performance_events=performance_events,
+            observed_end_sec=observed_end_sec,
+            transport_segments=transport_segments,
+            reference_origin_sec=reference_origin_sec,
+            kc_labeler_version=kc_labeler_version,
+        )
+        if result['alignment_run_id']!=run:
+            raise ValueError('Alignment run identity mismatch')
+        attach_attempt_context(result, attempt_context(row))
+        result.update(
+        data_architecture_version=DATA_ARCHITECTURE_VERSION,
+        learner_key=str(row['learner_key']),
+        session_id=str(row['id']),
+        source_environment=row.get('source_environment','unknown'),
+        practice_metadata=row['metadata'],
+        attempt_created_at=row['created_at'].isoformat(),
+        alignment_completed_at=datetime.now(timezone.utc).isoformat(),
+        performance_events=performance_events or [],
+        transport_segments=transport_segments,
+        performance_events_key=row.get('performance_events_key'),
+        performance_events_hash=row.get('performance_events_hash'),
+        performance_event_audit_schema_version=(telemetry or {}).get('schemaVersion'),
+    )
+        quality_valid,quality_reason=_quality(result)
+        for note in result['notes']:
+            note['within_observed_range']=observed_end_sec is None or note.get('ref_onset_sec') is None or note['ref_onset_sec']<=observed_end_sec+config.chord_onset_tolerance_sec
+            note['timing_labels_valid']=not settings.get('waiting',False) and quality_valid
+            note['alignment_quality_valid']=quality_valid
+            note['alignment_quality_reason']=quality_reason
+        observed=[n for n in result['notes'] if n['within_observed_range']]
+        expected=sum(n['alignment_type'] in ('match','deletion') for n in observed)
+        correct=sum(n['is_correct'] for n in observed)
+        result['summary'].update(
+            expected_notes=expected,
+            correct_notes=correct,
+            frontend_note_accuracy=settings.get('frontend_note_accuracy'),
+            backend_event_accuracy=backend_event_accuracy(result['events_data'], quality_valid),
+            missing_notes=sum(n['alignment_type']=='deletion' for n in observed),
+            timing_labels_valid=not settings.get('waiting',False) and quality_valid,
+            alignment_quality_valid=quality_valid,
+            alignment_quality_reason=quality_reason,
+        )
+        result['frontend_note_accuracy']=result['summary']['frontend_note_accuracy']
+        result['backend_event_accuracy']=result['summary']['backend_event_accuracy']
+        result['alignment_quality_valid']=quality_valid
+        result['alignment_quality_reason']=quality_reason
+        try:
+            store.json(result_key,result)
+        except ValueError:
+            # A duplicate lease may have completed first. Use the
+            # identical immutable result only if it satisfies this
+            # exact run identity; never overwrite it.
+            result=_read_json_or_none(store,result_key)
+            if result is None or not _is_current_result(
+                result,row,config,run,observed_end_sec,reference_origin_sec,
+                performance_events,transport_segments,kc_labeler_version,
+            ):
+                raise
+    raw = store.read(result_key)
+    if raw != result_bytes(result):
+        raise ValueError('Silver read-back integrity mismatch')
+    return result_key, result
+
+
+def process(attempt_id):
+    attempt_id=str(uuid.UUID(str(attempt_id)))
+    lease_token=str(uuid.uuid4())
+    with connect() as c:
+        row=c.execute("""update public.piano_attempts set status='VALIDATING',lease_token=%s,lease_until=now()+interval '10 minutes',processing_attempts=processing_attempts+1,updated_at=now()
+            where id=%s and source_environment=%s and data_architecture_version='3' and processing_attempts<8 and (status in ('ACCEPTED','UPLOADED') or (status='RETRY' and next_retry_at<=now()) or (status in ('VALIDATING','PROCESSING') and lease_until<now())) returning *""",(lease_token,attempt_id,recording_environment())).fetchone()
+        if not row:
+            current=c.execute("""select status,
+                lease_until>clock_timestamp() as lease_active,
+                next_retry_at>clock_timestamp() as retry_deferred
+                from public.piano_attempts where id=%s""",(attempt_id,)).fetchone()
+            reason = None
+            if current:
+                if current['status'] in ('READY','INVALID','FAILED'): reason = 'terminal'
+                elif current['status'] in ('VALIDATING','PROCESSING') and current['lease_active']: reason = 'active_lease'
+                elif current['status'] == 'RETRY' and current['retry_deferred']: reason = 'retry_deferred'
+            if reason:
+                logging.getLogger('uvicorn.error').info('stage=worker.duplicate outcome=ack reason=%s', reason)
+                return
+            logging.getLogger('uvicorn.error').warning('stage=worker.claim outcome=unavailable')
+            raise RuntimeError('Attempt busy or not finalized')
+    store=Objects(os.environ['DATA_ROOT'])
+    try:
+        settings=row['metadata'].get('settings',{}) if isinstance(row.get('metadata'),dict) else {}
+        observed_end_sec,reference_origin_sec=_alignment_window(settings)
+        config=AlignmentConfig(version=settings.get('alignment_version', DEFAULT_ALIGNMENT_VERSION),
+                               reference_grouping_version=settings.get('reference_grouping_version', '1.0.0'))
+        # The result key itself is the immutable crash-recovery marker. It is
+        # impossible for a legacy Parangonar manifest to pin this matcher to a
+        # stale result, and no create-only manifest needs to be overwritten.
+        with TemporaryDirectory(prefix='pianokt-worker-') as tmp:
+            with stage('worker.validate.' + attempt_id):
+                files,telemetry,generations=validate_files(store,row,tmp)
+            performance_events=(telemetry or {}).get('events')
+            transport_segments=(telemetry or {}).get('transportSegments',[])
+            with connect() as c:
+                validated=c.execute("""update public.piano_attempts set status='PROCESSING',
+                    validated_at=coalesce(validated_at,clock_timestamp()),file_generations=%s,
+                    validation_error=null,error_code=null,next_retry_at=null
+                    where id=%s and lease_token=%s returning *""",
+                    (Jsonb(generations),attempt_id,lease_token)).fetchone()
+                if not validated: raise RuntimeError('Worker lease superseded')
+                if validated.get('finalization'):
+                    project_challenge(c,validated,Finalize.model_validate(validated['finalization']))
+            result_key,result=build_silver(store,row,files,telemetry,config)
+        with connect() as c:
+            commit_alignment(c,attempt_id,lease_token,result_key,result)
+    except Exception as exc:
+        invalid=isinstance(exc,InvalidUpload)
+        exhausted=row['processing_attempts']>=8 or isinstance(exc,ReferenceGroupingMismatch)
+        state='INVALID' if invalid else ('FAILED' if exhausted else 'RETRY')
+        with connect() as c:
+            c.execute("""update public.piano_attempts set status=%s,error_code=%s,validation_error=%s,
+                next_retry_at=now()+interval '1 minute' * %s,lease_until=null,updated_at=now()
+                where id=%s and lease_token=%s and status<>'READY'""",
+                (state,type(exc).__name__,str(exc)[:500] if invalid else None,
+                 min(2**row['processing_attempts'],30),attempt_id,lease_token))
+        if invalid or exhausted:
+            return  # Acknowledge permanent failure; never poison-loop the queue.
+        raise

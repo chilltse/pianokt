@@ -8,9 +8,15 @@
     system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
     'Noto Color Emoji';
   font-family: var(--sightread-font-family);
+  /* Safe area for notched devices (iPad/iPhone); viewport-fit=cover in root.tsx uses these */
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
 }
 
 @theme {
+  /* Use lg (1024px) for mobile/desktop layout switch so iPad (768–1024px) gets mobile layout */
   --breakpoint-*: initial;
   --breakpoint-sm: 640px;
   --breakpoint-md: 768px;
@@ -20,13 +26,13 @@
   --text-responsive-xxl: clamp(1.7rem, 1rem + 3vw, 3rem);
   --text-responsive-xl: clamp(1rem, 1rem + 1vw, 1.2rem);
 
-  --color-purple-lightest: #f7f4fe;
-  --color-purple-light: #eee5ff;
-  --color-purple-hover: #b99af4;
-  --color-purple-primary: #8147eb;
-  --color-purple-dark: #611ae5;
-  --color-purple-darker: #5326a6;
-  --color-purple-darkest: #280a6c;
+  --color-purple-lightest: #fafaf8;
+  --color-purple-light: #f5f4f0;
+  --color-purple-hover: #a8a29e;
+  --color-purple-primary: #78716c;
+  --color-purple-dark: #57534e;
+  --color-purple-darker: #44403c;
+  --color-purple-darkest: #292524;
 
   --color-orange-light: #dc7e52;
   --color-orange-primary: #eb7847;
@@ -80,6 +86,26 @@
   ::file-selector-button {
     border-color: var(--color-gray-200, currentColor);
   }
+
+  /* Prevent horizontal overflow on mobile/tablet (e.g. iPad); 100vw can exceed visible area on iOS */
+  html {
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+    min-width: 0;
+    /* Prevent iOS from inflating font size (causes “zoomed” layout in portrait) */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  body {
+    overflow-x: hidden;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 100dvh;
+    /* Keep layout at 1:1 on iPad Chrome portrait so full page is visible */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
 }
 
 @keyframes shimmer {
@@ -105,12 +131,49 @@
 }
 
 .glint-card:hover {
-  border-color: rgba(129, 71, 235, 0.35);
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.06);
   transform: translateY(-2px);
 }
 
+/* 纸张磨砂纹理：低饱和度米黄底 + 轻微噪点 */
+.bg-paper {
+  position: relative;
+}
+
+.bg-paper::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+}
+
+.bg-paper > * {
+  position: relative;
+  z-index: 1;
+}
+
 @layer utilities {
+  /* Full viewport that respects safe area (notch, home indicator) on iPad/iPhone */
+  .inset-safe {
+    top: var(--safe-area-inset-top);
+    right: var(--safe-area-inset-right);
+    bottom: var(--safe-area-inset-bottom);
+    left: var(--safe-area-inset-left);
+  }
+  .min-h-screen-safe {
+    min-height: calc(100dvh - var(--safe-area-inset-top) - var(--safe-area-inset-bottom));
+  }
+
+  /* Scrollbar compensation only on desktop (lg+); tablet/iPad use mobile layout */
+  @media (min-width: 1024px) {
+    .appbar-scrollbar-pad {
+      padding-left: calc(100vw - 100%);
+    }
+  }
+
   /* Music font stuff */
   @font-face {
     font-family: Leland;
@@ -127,8 +190,8 @@
     --card-foreground: 224 71.4% 4.1%;
     --popover: 0 0% 100%;
     --popover-foreground: 224 71.4% 4.1%;
-    --primary: 262.1 83.3% 57.8%;
-    --primary-foreground: 210 20% 98%;
+    --primary: 25 5% 45%;
+    --primary-foreground: 0 0% 98%;
     --secondary: 220 14.3% 95.9%;
     --secondary-foreground: 220.9 39.3% 11%;
     --muted: 220 14.3% 95.9%;
@@ -139,7 +202,7 @@
     --destructive-foreground: 210 20% 98%;
     --border: 220 13% 91%;
     --input: 220 13% 91%;
-    --ring: 262.1 83.3% 57.8%;
+    --ring: 25 5% 45%;
     --radius: 0.5rem;
   }
 
@@ -150,7 +213,7 @@
     --card-foreground: 210 20% 98%;
     --popover: 224 71.4% 4.1%;
     --popover-foreground: 210 20% 98%;
-    --primary: 263.4 70% 50.4%;
+    --primary: 25 5% 45%;
     --primary-foreground: 210 20% 98%;
     --secondary: 215 27.9% 16.9%;
     --secondary-foreground: 210 20% 98%;
@@ -162,6 +225,6 @@
     --destructive-foreground: 210 20% 98%;
     --border: 215 27.9% 16.9%;
     --input: 215 27.9% 16.9%;
-    --ring: 263.4 70% 50.4%;
+    --ring: 25 5% 45%;
   }
 }

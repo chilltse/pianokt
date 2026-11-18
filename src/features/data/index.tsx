@@ -1,27 +1,56 @@
 import { parseMidi } from '@/features/parsers'
-import { Song, SongSource } from '@/types'
-import { base64ToBytes, peek } from '@/utils'
+import { Song, SongMetadata, SongSource } from '@/types'
+import { base64ToBytes } from '@/utils'
 import type { SWRResponse } from 'swr'
 import useSWRImmutable from 'swr/immutable'
 import * as persistence from '../persist/persistence'
-
-async function handleSong(response: Response): Promise<Song> {
-  return response.arrayBuffer().then((buf) => parseMidi(new Uint8Array(buf)))
-}
-
-function getBuiltinSongUrl(id: string) {
-  return `/music/songs/${id}`
-}
+import { catalog, loadOfficialMidi, fetchFullSongCatalog } from './catalog'
+import { useCatalogStatus, useSongMetadata } from './library'
 
 function getBase64Song(data: string): Song {
   const binaryMidi = base64ToBytes(data)
   return parseMidi(binaryMidi)
 }
 
-async function fetchSong(id: string, source: SongSource): Promise<Song> {
+export async function fetchSong(
+  id: string,
+  source: SongSource,
+  identity?: SongMetadata,
+): Promise<Song> {
+  if (source === 'builtin' && id.startsWith('full:')) {
+    const metadata = identity ?? (await fetchFullSongCatalog()).find(row => row.id === id)
+    if (metadata?.resource_kind !== 'full_song' || metadata.id !== `full:${metadata.song_id}` || !metadata.midi_sha256 || !metadata.storage_path) throw new Error('Unknown full song resource')
+    const bytes = await loadOfficialMidi({ midi_sha256: metadata.midi_sha256, storage_path: metadata.storage_path })
+    return {...parseMidi(new Uint8Array(bytes)), officialSongIdentity: {song_id: metadata.song_id!, midi_sha256: metadata.midi_sha256}}
+  }
   if (source === 'builtin') {
-    const url = getBuiltinSongUrl(id)
-    return fetch(url).then(handleSong)
+    await catalog.cached()
+    let metadata = identity ?? catalog.resolve(id)
+    if (!metadata) {
+      await catalog.refresh()
+      metadata = catalog.resolve(id)
+    }
+    if (
+      !metadata?.midi_sha256 ||
+      !metadata.storage_path ||
+      !metadata.song_id ||
+      !metadata.segment_id ||
+      !metadata.segment_index
+    )
+      throw new Error('Unknown official song')
+    const bytes = await loadOfficialMidi({
+      midi_sha256: metadata.midi_sha256,
+      storage_path: metadata.storage_path,
+    })
+    return {
+      ...parseMidi(new Uint8Array(bytes)),
+      officialIdentity: {
+        song_id: metadata.song_id!,
+        segment_id: metadata.segment_id!,
+        segment_index: metadata.segment_index!,
+        midi_sha256: metadata.midi_sha256,
+      },
+    }
   } else if (source === 'base64') {
     return getBase64Song(id)
   } else if (source === 'local') {
@@ -45,5 +74,16 @@ async function fetchSong(id: string, source: SongSource): Promise<Song> {
 }
 
 export function useSong(id: string, source: SongSource): SWRResponse<Song, any, any> {
-  return useSWRImmutable([id, source], ([id, source]) => fetchSong(id, source))
+  const metadata = useSongMetadata(id, source)
+  const status = useCatalogStatus()
+  return useSWRImmutable(
+    source === 'builtin' && !metadata && !status.data && !status.error
+      ? null
+      : [id, source, metadata?.midi_sha256],
+    () => {
+      if (source === 'builtin' && !id.startsWith('full:') && !metadata)
+        throw status.error ?? new Error('Unknown official song')
+      return fetchSong(id, source, metadata)
+    },
+  )
 }

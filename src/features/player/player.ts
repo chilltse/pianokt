@@ -1,3 +1,4 @@
+import assessmentPolicy from '../../../backend/pianokt_backend/alignment/assessment_policies/versions/v1_0_0.json'
 // TODO: handle when users don't have an AudioContext supporting browser
 import { getSynthStub, InstrumentName } from '@/features/synth'
 import { transposeMidi } from '@/features/theory'
@@ -12,8 +13,8 @@ function increment(x: number) {
 }
 
 type JotaiStore = ReturnType<typeof getDefaultStore>
-const GOOD_RANGE = 300
-const PERFECT_RANGE = 50
+const GOOD_RANGE = assessmentPolicy.timing.max_tolerance_ms
+const PERFECT_RANGE = assessmentPolicy.timing.perfect_threshold_ms
 const DEFAULT_BPM = 120
 const DEFAULT_TIME_SIGNATURE = { numerator: 4, denominator: 4 }
 
@@ -105,9 +106,9 @@ export class Player {
   lateNotes: Map<number, SongNote> = new Map()
   skipMissedNotes = false
 
-  constructor(store: JotaiStore) {
+  constructor(store: JotaiStore, listenToMidi = true) {
     this.store = store
-    midi.subscribe((midiEvent) => this.processMidiEvent(midiEvent))
+    if (listenToMidi) midi.subscribe((midiEvent) => this.processMidiEvent(midiEvent))
   }
 
   getSong() {
@@ -118,7 +119,7 @@ export class Player {
     let missedNotes = 0
     for (const [midiNote, missedNote] of this.lateNotes.entries()) {
       const diff = this.calcDiff(this.currentSongTime, missedNote.time)
-      if (diff > GOOD_RANGE) {
+      if (diff > GOOD_RANGE + 1e-9) {
         this.lateNotes.delete(midiNote)
         missedNotes++
         this.missedNotes.add(missedNote)
@@ -157,10 +158,10 @@ export class Player {
       const currentTime = this.currentSongTime
       this.lateNotes.delete(midiNote)
       const diff = this.calcDiff(currentTime, lateNote.time)
-      const isHit = diff < GOOD_RANGE
-      if (diff < PERFECT_RANGE) {
+      const isHit = Math.abs(diff) <= GOOD_RANGE + 1e-9
+      if (isHit && Math.abs(diff) <= PERFECT_RANGE) {
         this.store.set(this.score.perfect, increment)
-      } else if (diff < GOOD_RANGE) {
+      } else if (isHit) {
         this.store.set(this.score.good, increment)
       }
       if (isHit) {
@@ -179,8 +180,8 @@ export class Player {
     )
     if (nextNote && !isHitNote(this, nextNote)) {
       const diff = this.calcDiff(nextNote.time, this.currentSongTime)
-      if (diff < GOOD_RANGE) {
-        diff < PERFECT_RANGE
+      if (Math.abs(diff) <= GOOD_RANGE + 1e-9) {
+        Math.abs(diff) <= PERFECT_RANGE
           ? this.store.set(this.score.perfect, increment)
           : this.store.set(this.score.good, increment)
 
@@ -196,7 +197,7 @@ export class Player {
 
   // Given two song timestamps, return their difference in milliseconds after adjusting for the bpm modifier
   calcDiff(to: number, from: number) {
-    return ((to - from) * 1000) / this.store.get(this.bpmModifier)
+    return (to - from) * 1000
   }
 
   /* Return all notes that are valid to hit */
@@ -290,6 +291,16 @@ export class Player {
   }
 
   getTime() {
+    return this.getTimeAt(performance.now())
+  }
+
+  /**
+   * Return transport time at a supplied monotonic browser timestamp.  MIDI
+   * devices expose event.timeStamp in the same high-resolution clock domain,
+   * so Challenge recording can use the key's timestamp instead of the time
+   * its JavaScript callback happened to run.
+   */
+  getTimeAt(monotonicTimeMs: number) {
     const offset = 0 // getAudioContext().outputLatency
     const song = this.getSong()
     if (!song) {
@@ -304,9 +315,14 @@ export class Player {
       return this.currentSongTime - offset
     }
 
-    const now = performance.now()
-    const dt = now - this.lastIntervalFiredTime
-    return Math.max(0, this.currentSongTime + dt / 1000 - offset)
+    // `currentSongTime` is the transport position at `lastIntervalFiredTime`.
+    // A Web MIDI callback may be dispatched after a newer player tick, so its
+    // original timestamp can legitimately be *before* that anchor. Keeping
+    // the signed delta reconstructs the key's position instead of turning JS
+    // queueing latency into a falsely late performance.
+    const dt = monotonicTimeMs - this.lastIntervalFiredTime
+    const rate = this.store.get(this.bpmModifier)
+    return Math.max(0, this.currentSongTime + (dt / 1000) * rate - offset)
   }
 
   getBpm() {
@@ -479,8 +495,8 @@ export class Player {
 
     // If at the end of the song, stop playing.
     if (this.currentSongTime >= this.getDuration()) {
-      this.seek(this.getDuration())
       this.pause()
+      this.seek(this.getDuration())
     }
 
     // If a range is selected and you just got past it then zoom back
@@ -598,6 +614,10 @@ export class Player {
     if (!this.isPlaying()) {
       return
     }
+    // Preserve the interpolated position before changing state. Otherwise a
+    // pause rewinds to the last timer tick, earlier than recorded MIDI and
+    // transport events, and the next resume/stop fails monotonic validation.
+    this.currentSongTime = this.getTime()
     this.store.set(this.state, 'Paused')
     clearInterval(this.playInterval)
     this.playInterval = null

@@ -5,7 +5,7 @@ import React, { MouseEvent, PropsWithChildren } from 'react'
 import { Button, TooltipTrigger } from 'react-aria-components'
 
 type TopBarProps = {
-  title?: string
+  title?: string // ? = 可选参数
   subtitle?: string
   onClickBack: () => void
   onClickMidi: (e: MouseEvent<any>) => void
@@ -48,7 +48,7 @@ export default function TopBar({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-4 md:gap-8">
+        <div className="flex items-center gap-4 lg:gap-8">
           <ButtonWithTooltip
             tooltip={statsVisible ? 'Hide Stats' : 'Show Stats'}
             isActive={statsVisible}

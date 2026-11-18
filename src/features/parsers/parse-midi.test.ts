@@ -6,7 +6,7 @@ import serializeMidi from './serialize-midi'
 
 describe('parseMidi (score-meta fixtures)', () => {
   const fixtureDir = path.join(process.cwd(), 'tests/mscore-meta')
-  const songDir = path.join(process.cwd(), 'public/music/songs')
+  const songDir = path.join(process.cwd(), 'scripts/song_catalog/midi')
   const fixtureFiles = readdirSync(fixtureDir).filter((file) => file.endsWith('.score-meta.json'))
   const assertDuration = (midiBytes: Uint8Array, expectedSeconds?: number) => {
     if (typeof expectedSeconds !== 'number') {

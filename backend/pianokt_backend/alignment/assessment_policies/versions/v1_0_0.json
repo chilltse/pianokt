@@ -1,0 +1,1 @@
+{"version":"1.0.0","timing":{"mode":"ioi_adaptive","ioi_ratio":0.4,"max_tolerance_ms":200,"asymmetric":true,"perfect_threshold_ms":50},"event_accuracy":{"method":"correct_over_reference_plus_extra","threshold":1.0}}

@@ -1,0 +1,16 @@
+{
+  "model_type": "akt_fmkc",
+  "model_version": "sha256:06a498bf828cd2c1445c4dcda76e2edc724678825ab6dd3e9af7327de174737a",
+  "feature_version": "sha256:1b59db4d1a8156400138163b416b5008c24e9b048c03044e90937e3c4adc332b",
+  "kc_feature_names": ["kc_0", "kc_1", "kc_2", "kc_3", "kc_4", "kc_5"],
+  "seq_len": 128,
+  "device": "cpu",
+  "dtype": "float32",
+  "single_process": true,
+  "limits": {
+    "max_branches": 64, "max_branch_bytes": 268435456,
+    "max_rollout_steps": 512, "max_trajectories": 32,
+    "max_rollout_work": 8192, "max_candidates": 256,
+    "max_batch_events": 512, "max_output_steps": 2048
+  }
+}

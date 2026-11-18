@@ -25,8 +25,10 @@ export function isPiano(t: Track): boolean {
 export function parserInferHands(song: Song): { left: number; right: number } {
   // First, check against known likely left/right names for tracks:
   const trackNames = Object.values(song.tracks).map((track) => track.name ?? '')
-  const likelyLeft = ['bass', 'left', 'lh', 'L.H.']
-  const likelyRight = ['treble', 'lead', 'rh', 'right', 'R.H.', 'Student']
+  // const likelyLeft = ['bass', 'left', 'lh', 'L.H.']
+  const likelyLeft = ['bass', 'left', 'lh', 'l.h.']
+  // const likelyRight = ['treble', 'lead', 'rh', 'right', 'R.H.', 'Student']
+  const likelyRight = ['treble', 'lead', 'rh', 'right', 'r.h.', 'student']
   const likelyLeftTrack = trackNames.find((name) => likelyLeft.includes(name.toLowerCase()))
   const likelyRightTrack = trackNames.find((name) => likelyRight.includes(name.toLowerCase()))
   if (likelyLeftTrack && likelyRightTrack) {

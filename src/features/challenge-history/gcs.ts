@@ -1,0 +1,335 @@
+import alignmentPolicy from '../../../backend/pianokt_backend/alignment/alignment_policies/versions/v2_0_0.json'
+import type { Activity } from '@/features/activity'
+import { supabase } from '@/features/auth/supabase'
+import { indexedUploadStore, UploadQueue, type PendingUpload } from './upload-queue'
+
+const apiRoot = (import.meta.env.VITE_PIANOKT_API_URL as string | undefined)?.replace(/\/$/, '')
+export const localAlignmentLabEnabled =
+  import.meta.env.DEV && import.meta.env.VITE_LOCAL_ALIGNMENT_LAB === 'true'
+async function timedRequest(label: string, url: string, options: RequestInit) {
+  const start = performance.now()
+  try {
+    const response = await fetch(url, { ...options, signal: AbortSignal.timeout(120_000) })
+    const requestId = response.headers.get('X-Request-ID')
+    if (requestId) console.debug('[Upload request]', label, requestId)
+    return response
+  } finally {
+    console.debug('[Upload timing]', label, Math.round(performance.now() - start), 'ms')
+  }
+}
+
+export class BackendError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
+type CloudReceipt = {
+  id: string
+  status: string
+  validated_at: string | null
+  validation_error?: string | null
+  error_code?: string | null
+}
+
+export async function backendRequest<T>(
+  path: string,
+  body?: unknown,
+  expectedOwner?: string,
+): Promise<T> {
+  if (!apiRoot || !supabase) throw new Error('PianoKT backend is not configured')
+  const {
+    data: { session },
+  } = await supabase.auth.getSession()
+  if (!session) throw new Error('Not authenticated')
+  if (expectedOwner && session.user.id !== expectedOwner)
+    throw new Error('Upload belongs to another signed-in user')
+  const response = await timedRequest(path, apiRoot + path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!response.ok)
+    throw new BackendError(response.status, `Backend ${response.status}: ${await response.text()}`)
+  return response.json() as Promise<T>
+}
+
+export async function runLocalAlignment(params: {
+  performanceMidiBase64: string
+  referenceMidiBase64: string
+  performanceEvents: RecordingUpload['performanceEvents']
+  observedEndSec: number
+  referenceOriginSec: number
+}): Promise<Record<string, unknown>> {
+  if (!localAlignmentLabEnabled || !apiRoot) throw new Error('Local alignment lab is disabled')
+  const response = await fetch(`${apiRoot}/debug/local-align`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      performance_midi_base64: params.performanceMidiBase64,
+      reference_midi_base64: params.referenceMidiBase64,
+      performance_events: params.performanceEvents,
+      observed_end_sec: params.observedEndSec,
+      reference_origin_sec: params.referenceOriginSec,
+    }),
+  })
+  if (!response.ok) throw new Error(`Local alignment ${response.status}: ${await response.text()}`)
+  return response.json() as Promise<Record<string, unknown>>
+}
+export type RecordingUpload = {
+  schemaVersion: 2
+  songSource: string
+  segmentId?: string
+  segmentIndex?: number
+  midiSha256?: string
+  songId: string
+  songTitle: string | null
+  durationSec: number
+  midiBase64: string
+  referenceMidiBase64: string
+  activity: Activity
+  practiceSettings?: Record<string, unknown>
+  accuracyPct?: number
+  difficulty?: number
+  midiKeyboardUsed?: boolean
+  /** Immutable, per-key evidence used by the time-guided alignment worker. */
+  performanceEvents?: {
+    schemaVersion: 1
+    events: Array<{
+      sequence: number
+      type: 'note_on' | 'note_off'
+      midiEventTimestamp: number
+      playerSongTime: number
+      performanceNowTimestamp: number
+      pitch: number
+      velocity: number
+      timestampSource: 'web_midi' | 'browser_keyboard'
+    }>
+    transportSegments: Array<{
+      sequence: number
+      type: 'start' | 'resume' | 'pause' | 'stop'
+      playerSongTime: number
+      performanceNowTimestamp: number
+    }>
+  }
+}
+
+/** Finalization references the registered attempt; song identity lives on the server. */
+export function recordingActivity(params: RecordingUpload) {
+  const context = params.activity.attempt
+  if (!context) throw new Error('Challenge attempt context is missing')
+  return {
+    ...params.activity,
+    attempt: {
+      attempt_id: context.attempt_id,
+      visit_attempt_sequence: context.visit_attempt_sequence,
+      started_at: context.started_at,
+    },
+  }
+}
+
+function decode(s: string) {
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
+}
+async function hash(bytes: Uint8Array) {
+  const value = await crypto.subtle.digest('SHA-256', new Uint8Array(bytes))
+  return Array.from(new Uint8Array(value), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+async function uploadSealedRecording(
+  params: RecordingUpload,
+  ownerId: string,
+  attemptId: string,
+): Promise<{ id: string; validated?: boolean } | { error: string }> {
+  try {
+    // The durable server receipt survives reloads and lost finalize responses.
+    // Poll accepted uploads instead of uploading/signing them again.
+    try {
+      const receipt = await backendRequest<CloudReceipt>(
+        `/attempts/${attemptId}`,
+        undefined,
+        ownerId,
+      )
+      if (receipt.status === 'INVALID' || receipt.status === 'FAILED') {
+        if (receipt.validated_at) return { id: attemptId, validated: true }
+        console.warn('[Upload recovery]', attemptId, receipt.validation_error ?? receipt.status)
+        return { id: attemptId, validated: false }
+      }
+      const missingFile =
+        receipt.status === 'RETRY' &&
+        !receipt.validated_at &&
+        ['NotFound', 'FileNotFoundError'].includes(receipt.error_code ?? '')
+      if (receipt.status !== 'CREATED' && !missingFile)
+        return { id: attemptId, validated: Boolean(receipt.validated_at) }
+    } catch (error) {
+      if (!(error instanceof BackendError) || error.status !== 404) throw error
+    }
+    const activity = recordingActivity(params)
+    const performance = decode(params.midiBase64),
+      reference = decode(params.referenceMidiBase64)
+    const [performanceHash, referenceHash] = await Promise.all([hash(performance), hash(reference)])
+    const performanceEvents = params.performanceEvents
+    const performanceEventsBytes = performanceEvents
+      ? new TextEncoder().encode(JSON.stringify(performanceEvents))
+      : undefined
+    const performanceEventsHash = performanceEventsBytes
+      ? await hash(performanceEventsBytes)
+      : undefined
+    const urls = await backendRequest<{
+      performance_url: string
+      reference_url: string
+      performance_events_url?: string
+    }>(
+      '/attempts',
+      {
+        schema_version: 2,
+        attempt_id: attemptId,
+        song_id: params.songId,
+        ...(params.segmentId
+          ? { segment_id: params.segmentId, segment_index: params.segmentIndex }
+          : {}),
+        ...(params.midiSha256 ? { midi_sha256: params.midiSha256 } : {}),
+        song_source: params.songSource,
+        song_title: params.songTitle,
+        duration_sec: params.durationSec,
+        performance_hash: performanceHash,
+        reference_hash: referenceHash,
+        settings: {
+          alignment_version: alignmentPolicy.version,
+          ...params.practiceSettings,
+          client_accuracy_pct: params.accuracyPct,
+          frontend_note_accuracy: params.accuracyPct == null ? undefined : params.accuracyPct / 100,
+          client_difficulty: params.difficulty,
+          midi_keyboard_used: params.midiKeyboardUsed,
+        },
+        ...(performanceEventsHash
+          ? {
+              performance_events_hash: performanceEventsHash,
+              performance_events_count: performanceEvents?.events.length,
+            }
+          : {}),
+      },
+      ownerId,
+    )
+    const uploads: Array<{ url: string; bytes: Uint8Array; contentType: string }> = [
+      { url: urls.performance_url, bytes: performance, contentType: 'audio/midi' },
+      { url: urls.reference_url, bytes: reference, contentType: 'audio/midi' },
+    ]
+    if (performanceEventsBytes) {
+      if (!urls.performance_events_url)
+        throw new Error('Backend did not provide a performance event upload URL')
+      uploads.push({
+        url: urls.performance_events_url,
+        bytes: performanceEventsBytes,
+        contentType: 'application/json',
+      })
+    }
+    const outcomes = await Promise.allSettled(
+      uploads.map(async ({ url, bytes, contentType }, index) => {
+        const response = await timedRequest(`put.${attemptId}.${index}`, url, {
+          method: 'PUT',
+          headers: { 'Content-Type': contentType, 'x-goog-if-generation-match': '0' },
+          body: new Uint8Array(bytes),
+        })
+        if (!response.ok && response.status !== 412)
+          throw new Error(`MIDI upload failed: ${response.status}`)
+      }),
+    )
+    const failure = outcomes.find((outcome) => outcome.status === 'rejected')
+    if (failure?.status === 'rejected') throw failure.reason
+    const result = await backendRequest<CloudReceipt>(
+      `/attempts/${attemptId}/finalize`,
+      { schema_version: 3, activity },
+      ownerId,
+    )
+    return { id: result.id, validated: Boolean(result.validated_at) }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Upload failed' }
+  }
+}
+
+// Storage quota/availability errors retain the full bundle in memory for retry.
+// Browser close cannot guarantee durability until IndexedDB reports a commit.
+const unsealed = new Map<string, PendingUpload<RecordingUpload>>()
+function protectUnsealed(event: BeforeUnloadEvent) {
+  if (unsealed.size) {
+    event.preventDefault()
+    event.returnValue = ''
+  }
+}
+function sealed(id: string) {
+  unsealed.delete(id)
+  if (!unsealed.size) window.removeEventListener('beforeunload', protectUnsealed)
+}
+let queue: UploadQueue<RecordingUpload> | undefined
+function uploadQueue() {
+  return (queue ??= new UploadQueue(indexedUploadStore<RecordingUpload>(), async (record) => {
+    const result = await uploadSealedRecording(record.payload, record.ownerId, record.id)
+    if ('error' in result) throw new Error(result.error)
+    return result.validated === true
+  }))
+}
+
+export async function saveGcsRecording(
+  params: RecordingUpload,
+): Promise<{ id: string } | { error: string }> {
+  try {
+    const ownerId = params.activity.owner_id
+    if (!ownerId) throw new Error('Not authenticated')
+    const id = params.activity.attempt?.attempt_id
+    if (!id || params.schemaVersion !== 2) throw new Error('Challenge v2 context is required')
+    // Serialization seals values, including telemetry and the final event sequence.
+    const payload = JSON.parse(
+      JSON.stringify(params),
+    ) as RecordingUpload
+    const record = { id, ownerId, payload }
+    const key = `${ownerId}:${id}`
+    if (unsealed.has(key) && JSON.stringify(unsealed.get(key)) !== JSON.stringify(record))
+      throw new Error('Immutable upload bundle conflict')
+    unsealed.set(key, record)
+    window.addEventListener('beforeunload', protectUnsealed)
+    await uploadQueue().seal(record, () => sealed(key))
+    // Route lifetime ends at durable local commit; global recovery owns remote delivery.
+    void resumePendingUploads(ownerId)
+    return { id }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Upload failed' }
+  }
+}
+
+let replaying = false
+let replayRequested = false
+let replayOwner: string | undefined
+export async function resumePendingUploads(ownerId: string) {
+  if (!apiRoot || localAlignmentLabEnabled) return
+  replayOwner = ownerId
+  if (replaying) {
+    replayRequested = true
+    return
+  }
+  replaying = true
+  try {
+    for (const [key, record] of unsealed) {
+      if (record.ownerId !== ownerId) continue
+      try {
+        await uploadQueue().enqueue(record, () => sealed(key))
+      } catch (error) {
+        console.warn('[Upload recovery] Retry pending', error)
+      }
+    }
+    do {
+      replayRequested = false
+      const failures = await uploadQueue().replay(replayOwner ?? ownerId)
+      if (failures.length) console.warn('[Upload recovery] Bundles retained for retry', failures)
+    } while (replayRequested)
+  } catch (error) {
+    console.error('[Upload recovery] Persistence unavailable', error)
+  } finally {
+    replaying = false
+  }
+}

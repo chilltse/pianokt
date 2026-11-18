@@ -1,0 +1,8 @@
+export { AuthProvider, useAuth, useOptionalAuth } from './context'
+export { useRequireAuth } from './requireAuth'
+export type { PathKind } from './requireAuth'
+export { getProfile, updateProfile } from './profile'
+export { isAuthEnabled, supabase } from './supabase'
+export { uploadAvatar, validateAvatarFile } from './uploadAvatar'
+export type { AuthUser, AuthState } from './types'
+export type { ProfileRow } from './profile'

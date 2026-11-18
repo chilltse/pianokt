@@ -14,7 +14,7 @@ type ModalProps = {
 }
 
 const overlayStyles = tv({
-  base: 'fixed top-0 left-0 w-full h-(--visual-viewport-height) isolate z-20 bg-gray-400/60 flex items-center justify-center p-4 text-center',
+  base: 'fixed inset-0 isolate z-20 flex items-center justify-center overflow-y-auto overflow-x-hidden text-center bg-gray-400/60 min-h-[100dvh] [padding:max(1rem,env(safe-area-inset-top))_max(1rem,env(safe-area-inset-right))_max(1rem,env(safe-area-inset-bottom))_max(1rem,env(safe-area-inset-left))]',
   variants: {
     isEntering: {
       true: 'animate-in fade-in duration-100 ease-out',
@@ -26,7 +26,7 @@ const overlayStyles = tv({
 })
 
 const modalStyles = tv({
-  base: 'w-full max-w-md max-h-full rounded-2xl bg-white text-left align-middle text-slate-700 shadow-2xl bg-clip-padding border border-black/10',
+  base: 'w-full max-w-md max-h-[min(90dvh,100%)] my-auto rounded-2xl bg-white text-left align-middle text-slate-700 shadow-2xl bg-clip-padding border border-black/10 shrink-0',
   variants: {
     isEntering: {
       true: 'animate-in zoom-in-105 ease-out duration-100',

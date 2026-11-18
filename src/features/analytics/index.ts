@@ -1,12 +1,8 @@
-if (import.meta.env.PROD && !import.meta.env.VITE_PUBLIC_GA_ID) {
-  throw new Error('Missing VITE_PUBLIC_GA_ID')
-}
-
 export const GA_TRACKING_ID = import.meta.env.VITE_PUBLIC_GA_ID ?? ''
 
 // https://developers.google.com/analytics/devguides/collection/gtagjs/pages
 export const pageview = (url: string) => {
-  if (!import.meta.env.PROD) {
+  if (!import.meta.env.PROD || !GA_TRACKING_ID || typeof window === 'undefined' || typeof window.gtag !== 'function') {
     return
   }
   window.gtag('config', GA_TRACKING_ID, {
@@ -16,7 +12,7 @@ export const pageview = (url: string) => {
 
 // https://developers.google.com/analytics/devguides/collection/gtagjs/events
 export const event = ({ action, category, label, value }: any) => {
-  if (!import.meta.env.PROD) {
+  if (!import.meta.env.PROD || !GA_TRACKING_ID || typeof window === 'undefined' || typeof window.gtag !== 'function') {
     return
   }
   window.gtag('event', action, {

@@ -13,7 +13,7 @@ export interface TooltipProps extends Omit<AriaTooltipProps, 'children'> {
 }
 
 const styles = tv({
-  base: 'group bg-violet-600 text-white/90 py-1 px-2 rounded-md text-sm drop-shadow-lg will-change-transform',
+  base: 'group bg-stone-500 text-stone-50 py-1 px-2 rounded-md text-sm drop-shadow-lg will-change-transform',
   variants: {
     isEntering: {
       true: 'animate-in fade-in placement-bottom:slide-in-from-top-0.5 placement-top:slide-in-from-bottom-0.5 placement-left:slide-in-from-right-0.5 placement-right:slide-in-from-left-0.5 ease-out duration-200',
@@ -38,7 +38,7 @@ export function Tooltip({ children, ...props }: TooltipProps) {
           width={8}
           height={8}
           viewBox="0 0 8 8"
-          className="group-placement-bottom:rotate-180 group-placement-left:-rotate-90 group-placement-right:rotate-90 fill-violet-600"
+          className="group-placement-bottom:rotate-180 group-placement-left:-rotate-90 group-placement-right:rotate-90 fill-stone-500"
         >
           <path d="M0 0 L4 4 L8 0" />
         </svg>

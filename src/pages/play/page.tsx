@@ -42,8 +42,8 @@ function RequiresPermissionPrompt({
   onGoBack: () => void
 }) {
   return (
-    <div className="flex h-screen items-center justify-center bg-gray-50">
-      <div className="mx-auto max-w-md rounded-lg bg-white p-6 shadow-lg">
+    <div className="flex h-screen items-center justify-center bg-paper bg-amber-50/70">
+      <div className="mx-auto max-w-md rounded-lg bg-white p-6 shadow-lg border border-amber-100">
         <div className="mb-4 flex items-center gap-3">
           <AlertCircle className="h-6 w-6 text-orange-500" />
           <h2 className="text-lg font-medium text-gray-900">Permission Required</h2>
@@ -55,7 +55,7 @@ function RequiresPermissionPrompt({
         <div className="flex gap-3">
           <button
             onClick={onGoBack}
-            className="flex items-center gap-2 rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+            className="flex items-center gap-2 rounded-md border border-amber-200 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-amber-50"
           >
             <ArrowLeft className="h-4 w-4" />
             Go Back
@@ -75,8 +75,8 @@ function RequiresPermissionPrompt({
 
 function SongNotFound({ songTitle, onGoBack }: { songTitle?: string; onGoBack: () => void }) {
   return (
-    <div className="flex h-screen items-center justify-center bg-gray-50">
-      <div className="mx-auto max-w-md rounded-lg bg-white p-6 text-center shadow-lg">
+    <div className="flex h-screen items-center justify-center bg-paper bg-amber-50/70">
+      <div className="mx-auto max-w-md rounded-lg bg-white p-6 text-center shadow-lg border border-amber-100">
         <div className="mb-4">
           <AlertCircle className="mx-auto h-12 w-12 text-red-500" />
         </div>
@@ -88,12 +88,12 @@ function SongNotFound({ songTitle, onGoBack }: { songTitle?: string; onGoBack: (
         )}
         <p className="mb-6 text-sm text-gray-500">
           Please check that the file still exists or try selecting a different song. It may also be
-          that Sightread lost access to your local files. If that's the case, please re-scan
+          that PianoKT lost access to your local files. If that's the case, please re-scan
           directories in the "Manage Folders" menu.
         </p>
         <button
           onClick={onGoBack}
-          className="mx-auto flex cursor-pointer items-center gap-2 rounded-md bg-black px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
+          className="mx-auto flex cursor-pointer items-center gap-2 rounded-md bg-gray-800 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
         >
           <ArrowLeft className="h-4 w-4" />
           Go Back to Song List
@@ -395,7 +395,7 @@ export default function PlaySongPage() {
     <>
       <title>Playing</title>
       <div
-        className={clsx('fixed grid h-screen w-screen grid-rows-[auto_1fr_auto] outline-none')}
+        className={clsx('fixed inset-safe grid h-full w-full grid-rows-[auto_1fr_auto] outline-none min-h-0')}
         {...midiState.getListenerProps()}
         autoFocus
       >
@@ -437,7 +437,7 @@ export default function PlaySongPage() {
             </div>
           )}
           {!isRecording && isSettingsOpen ? (
-            <div className="absolute top-0 right-0 h-full w-[360px] border-l border-[#2b2a33] bg-[#121016] shadow-2xl">
+            <div className="absolute top-0 right-0 h-full w-full max-w-[360px] border-l border-[#2b2a33] bg-[#121016] shadow-2xl">
               <SettingsPanel
                 onChange={setSongConfig}
                 config={songConfig}

@@ -1,0 +1,17 @@
+project_id = "YOUR_PROJECT"
+region = "us-central1"
+image = "us-central1-docker.pkg.dev/YOUR_PROJECT/pianokt/backend:VERSION"
+frontend_origins = ["https://YOUR_FRONTEND"]
+supabase_url = "https://YOUR_SUPABASE.supabase.co"
+supabase_anon_key = "PUBLIC_ANON_KEY"
+database_secret_id = "pianokt-database-url"
+schedules_paused = true
+
+source_environment = "production"
+# Use a separate development deployment and explicit frontend_origins.
+
+# First rollout: keep relay_schedule="* * * * *" until direct dispatch is verified.
+# Final target: enable schedules, compensate every 15 min.
+relay_schedule = "*/15 * * * *"
+direct_pubsub_enabled = false
+direct_pubsub_timeout_s = 2

@@ -21,6 +21,7 @@ import { useState, type ReactNode } from 'react'
 interface MidiModalProps {
   isOpen: boolean
   onClose: () => void
+  canChangeSettings?: () => boolean
 }
 
 // TODO: reduce duplication between the inputs and the outputs.
@@ -30,6 +31,7 @@ export function MidiModal(props: MidiModalProps) {
   const { outputs, refreshOutput } = useMidiOutputs()
   const [refreshing, setRefreshing] = useState(false)
   const refreshMidiDevices = () => {
+    if (props.canChangeSettings && !props.canChangeSettings()) return
     refreshInput()
     refreshOutput()
   }
@@ -72,6 +74,7 @@ export function MidiModal(props: MidiModalProps) {
                       sublabel: device.manufacturer ? device.manufacturer : 'USB Connection',
                       enabled: enabledInputIds.has(device.id),
                       onToggle: async () => {
+                        if (props.canChangeSettings && !props.canChangeSettings()) return
                         if (enabledInputIds.has(device.id)) {
                           disableInputMidiDevice(device)
                         } else {
@@ -99,6 +102,7 @@ export function MidiModal(props: MidiModalProps) {
                         sublabel: 'Internal Synth',
                         enabled: audioContextEnabled,
                         onToggle: async () => {
+                        if (props.canChangeSettings && !props.canChangeSettings()) return
                           if (audioContextEnabled) {
                             disableAudioContext()
                           } else {
@@ -112,6 +116,7 @@ export function MidiModal(props: MidiModalProps) {
                         sublabel: device.manufacturer ? device.manufacturer : 'Hardware Port',
                         enabled: enabledOutputIds.has(device.id),
                         onToggle: async () => {
+                        if (props.canChangeSettings && !props.canChangeSettings()) return
                           if (enabledOutputIds.has(device.id)) {
                             disableOutputMidiDevice(device as any)
                           } else {

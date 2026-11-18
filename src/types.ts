@@ -13,7 +13,17 @@ export type DifficultyLabel =
 
 export type SongSource = 'local' | 'builtin' | 'generated' | 'base64'
 export type SongMetadata = {
+  /** Playable entry: official segment UUID, or a local/generated source ID. */
   id: string
+  resource_kind?: 'full_song'
+  midi_sha256?: string
+  storage_path?: string
+  song_id?: string
+  song_title?: string
+  segment_id?: string
+  segment_index?: number
+  segment_title?: string | null
+  composer?: string
   file: string
   title: string
   difficulty: number
@@ -69,7 +79,16 @@ export type SongMeasure = {
   number: number
 }
 
+export type OfficialMidiIdentity = {
+  song_id: string
+  segment_id: string
+  segment_index: number
+  midi_sha256: string
+}
+
 export type Song = {
+  officialSongIdentity?: { song_id: string; midi_sha256: string }
+  officialIdentity?: OfficialMidiIdentity
   tracks: Tracks
   duration: number
   measures: Array<SongMeasure>
@@ -125,6 +144,17 @@ export type MidiStateEvent = {
   note: number
   time: number
   velocity?: number
+  /**
+   * The timestamp supplied by the original browser input event. For Web MIDI
+   * this is MIDIMessageEvent.timeStamp; for browser-generated input it is the
+   * corresponding DOM event timestamp. It shares the performance.now() time
+   * origin in current browsers.
+   */
+  midiEventTimestamp?: number
+  /** Monotonic browser clock sampled when PianoKT handled the input event. */
+  performanceNowTimestamp?: number
+  /** Distinguishes physical Web MIDI input from browser-generated input. */
+  timestampSource?: 'web_midi' | 'browser_keyboard'
 }
 
 export type HandSettings = {
